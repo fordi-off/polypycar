@@ -1,18 +1,21 @@
 import argparse
-import random
-from .game import Game
+import os
+
+from .app import App
+from .settings import Settings
 
 
 def main():
-    ap = argparse.ArgumentParser(description='PolyPyCar - a chill low-poly 2D offroad sandbox')
-    ap.add_argument('--seed', type=int, default=None, help='world seed (default: random)')
-    ap.add_argument('--no-sound', action='store_true')
-    ap.add_argument('--size', default='1280x720')
-    ap.add_argument('--fullscreen', action='store_true')
+    ap = argparse.ArgumentParser(description='PolyPyCar - low-poly 2D snow & mud offroad')
+    ap.add_argument('--reset-settings', action='store_true', help='ignore and overwrite the saved settings')
+    ap.add_argument('--windowed', action='store_true', help='force windowed mode for this run')
     a = ap.parse_args()
-    w, h = (int(v) for v in a.size.lower().split('x'))
-    seed = a.seed if a.seed is not None else random.randrange(1, 10 ** 6)
-    Game(seed, sound=not a.no_sound, size=(w, h), fullscreen=a.fullscreen).run()
+    st = Settings()
+    if a.reset_settings:
+        st.reset_all()
+    if a.windowed:
+        st['display_mode'] = 'windowed'
+    App(st).run()
 
 
 if __name__ == '__main__':

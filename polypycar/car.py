@@ -15,58 +15,18 @@
 """
 import math
 from .util import clamp
+from . import vehicles as V
+from .drivetrain import Drivetrain
 
 G = 9.81
 TAU = math.tau
 SUBSTEP = 1.0 / 960.0
 
-CFG = dict(
-    mass=6500.0, inertia=42000.0,
-    wheel_mass=140.0, wheel_r=0.62, wheel_i=38.0,
-    mount_x=(3.0, -0.7, -2.4), mount_y=0.35,
-    # suspension (per axle)
-    l0=0.98, lmin=0.30, lmax=0.98,
-    k=(85000.0, 105000.0, 105000.0), k_prog=(260000.0, 320000.0, 320000.0),
-    c_bump=8000.0, c_reb=12500.0, v_blow=0.8, blow=0.35,
-    k_stop=1.1e6, c_stop=35000.0, k_lat=8.0e6, c_lat=45000.0,
-    # tyre
-    tire_k=480000.0, tire_c=4500.0, soil_c=14000.0, pen_max=0.26, k_rim=5.0e6, patch_gain=0.35, tire_w=1.3,
-    # friction curve
-    B=7.0, C=1.3, v_min=0.5,
-    # drivetrain
-    engine_i=1.6, idle=650.0, redline=2450.0, torque_scale=0.85, eta=0.9,
-    final=7.2, gears=(7.0, 4.7, 3.2, 2.2, 1.5, 1.0), reverse=6.0, low_mult=2.3,
-    clutch_cap=2600.0, brake_t=16000.0,
-    # coupling between the driven wheels
-    cpl_k=400.0, cpl_max=2000.0, lock_k=3500.0, lock_max=14000.0,
-    # aero / misc
-    drag=3.8, air_torque=30000.0, ground_torque=6000.0, ang_damp=2500.0,
-    body_k=500000.0, body_c=25000.0, body_mu=0.6,
-)
-
-# full-throttle torque (Nm) vs rpm
-TORQUE = [(0, 900), (600, 1300), (1000, 1750), (1400, 1900), (1900, 1800), (2300, 1450), (2600, 900), (2900, 0)]
-
-
-def torque_at(rpm):
-    if rpm <= 0:
-        return TORQUE[0][1]
-    for i in range(1, len(TORQUE)):
-        if rpm <= TORQUE[i][0]:
-            a, b = TORQUE[i - 1], TORQUE[i]
-            return a[1] + (b[1] - a[1]) * ((rpm - a[0]) / (b[0] - a[0]))
-    return 0.0
-
-
-# chassis collision points (chassis-local): bumpers, cab, deck, frame
-BODY_PTS = [(3.95, -0.15), (3.95, 0.9), (3.5, 2.55), (1.9, 2.6), (1.8, 1.0), (-1.0, 1.0), (-4.0, 1.0),
-            (-4.1, -0.2), (-3.0, -0.5), (-1.0, -0.5), (1.0, -0.5)]
-
 
 class Wheel:
     __slots__ = ('mx', 'k', 'kp', 'hx', 'hy', 'vx', 'vy', 'om', 'ang', 'con', 'touching', 'Fn', 'slip', 'vt',
                  'Fx', 'l', 'mat', 'loose', 'mu_e', 'G', 'g', 'tx', 'ty', 'crr', 'drag', 'pen', 'Fhx', 'Fhy',
-                 'z', 'soft', 'dens', 'ratio')
+                 'z', 'soft', 'dens', 'ratio', 'Tdrv')
 
     def __init__(self, mx, k, kp):
         self.mx, self.k, self.kp = mx, k, kp
@@ -76,20 +36,26 @@ class Wheel:
         self.Fn = self.slip = self.vt = self.Fx = self.l = 0.0
         self.mat = 0
         self.loose = self.mu_e = self.G = self.g = self.crr = self.drag = self.pen = 0.0
-        self.z = self.soft = self.dens = self.ratio = 0.0
+        self.z = self.soft = self.dens = self.ratio = self.Tdrv = 0.0
         self.tx, self.ty = 1.0, 0.0
         self.Fhx = self.Fhy = 0.0
 
 
 class Car:
-    def __init__(self, terrain):
+    def __init__(self, terrain, spec=None):
         self.t = terrain
-        self.cfg = dict(CFG)
-        c = self.cfg
+        self.spec = spec or V.LOGGER
+        self.cfg = c = V.phys(self.spec)
+        eng = self.spec.engine
+        self.engine = eng
+        c.update(idle=eng.idle, redline=eng.redline, engine_i=eng.inertia, gears=self.spec.gears,
+                 reverse=self.spec.reverse, final=self.spec.final)
+        self.n = len(c['mount_x'])
+        self.body_pts = list(self.spec.body_pts)
+        self.drive = Drivetrain(self.spec.drivetrain, self.n, self.spec.diff_scale)
         self.pressure = 1.0       # ratio vs nominal (~30 psi)
         self.auto = True
-        self.low = False          # low range
-        self.diff_lock = False
+        self.throttle_ramp = 0.9  # keyboard: how fast holding the gas builds power (1/s)
         self.wheels = [Wheel(x, c['k'][i], c['k_prog'][i]) for i, x in enumerate(c['mount_x'])]
         self.hit_f = 0.0
         self.hit = (0.0, 0.0)
@@ -100,12 +66,31 @@ class Car:
         self.tick = 0
         self.reset(0.0)
 
+    # drivetrain switches used by keys / the transmission app
+    @property
+    def low(self):
+        return self.drive.low
+
+    @low.setter
+    def low(self, v):
+        self.drive.low = bool(v)
+        self._update_ratio()
+
+    @property
+    def diff_lock(self):
+        return self.drive.all_locked
+
+    @diff_lock.setter
+    def diff_lock(self, v):
+        self.drive.set_all_locked(bool(v))
+
     # ------------------------------------------------------------------ state
     def reset(self, x):
         c, t = self.cfg, self.t
-        a = math.atan2(t.h(x + 3.0) - t.h(x - 3.0), 6.0)
-        ground = max(t.h(x + dx * 0.2) for dx in range(-25, 26))
-        self.x, self.y, self.a = x, ground + 2.2, a * 0.5
+        half = max(abs(m) for m in c['mount_x']) + 0.5
+        a = math.atan2(t.h(x + half) - t.h(x - half), 2 * half)
+        ground = max(t.h(x + dx * 0.2) for dx in range(-int(half * 5), int(half * 5) + 1))
+        self.x, self.y, self.a = x, ground + c['wheel_r'] + c['l0'] + 0.9, a * 0.5
         self.vx = self.vy = self.w = 0.0
         ca, sa = math.cos(self.a), math.sin(self.a)
         for w in self.wheels:
@@ -129,6 +114,7 @@ class Car:
         self.locked = False
         self.limiter = False
         self.odo = 0.0
+        self.Te = 0.0
 
     @property
     def pressure_psi(self):
@@ -143,7 +129,7 @@ class Car:
             self.ratio = 0.0
             return
         base = -c['reverse'] if g < 0 else c['gears'][g - 1]
-        self.ratio = base * c['final'] * (c['low_mult'] if self.low else 1.0)
+        self.ratio = base * c['final'] * (self.drive.low_mult if self.drive.low else 1.0)
 
     def set_gear(self, g):
         if g == self.gear:
@@ -155,10 +141,13 @@ class Car:
 
     def toggle_low(self):
         self.low = not self.low
-        self._update_ratio()
 
     def toggle_diff_lock(self):
         self.diff_lock = not self.diff_lock
+
+    def shift_to(self, g):
+        top = len(self.cfg['gears'])
+        self.set_gear(max(-1, min(top, g)))
 
     # --------------------------------------------- per-frame driver logic
     def control(self, dt, up, dn, hand, lean, shift_up=False, shift_dn=False):
@@ -186,7 +175,7 @@ class Car:
         if not self.auto and self.gear != -1 and dn > 0.05 and up < 0.05:
             thr, brk = 0.0, dn
         if thr > self.throttle:
-            self.throttle = min(thr, self.throttle + dt * 0.9 * thr)   # keyboard: hold W to build power
+            self.throttle = min(thr, self.throttle + dt * self.throttle_ramp * thr)   # keyboard: hold to build power
         else:
             self.throttle = max(thr, self.throttle - dt * 4.0)
         self.brake_out += (brk - self.brake_out) * min(1.0, dt * 14)
@@ -194,21 +183,24 @@ class Car:
         self.since_shift += dt
         gears = self.cfg['gears']
         n = len(self.wheels)
+        top = len(gears)
+        rl = self.cfg['redline']
         if self.auto and self.gear >= 1 and self.shift_t <= 0:
             gs = max(0.0, vf) / self.cfg['wheel_r']        # ground-speed based, ignores wheelspin
-            wb = min(gs, sum(w.om for w in self.wheels) / n)
+            on = [w.om for w, e in zip(self.wheels, self.drive.axle_on) if e] or [0.0]
+            wb = min(gs, sum(on) / len(on))
             rpm_d = self.ratio * wb * 30 / math.pi
             th = self.throttle
-            up_r = 1500 + 700 * th
-            dn_r = 1300 if th > 0.85 else 850 + 450 * th
-            if self.since_shift > 1.0 and self.gear < 6 and rpm_d > up_r:
-                if rpm_d * gears[self.gear] / gears[self.gear - 1] > 1050:
+            up_r = rl * (0.61 + 0.29 * th)
+            dn_r = rl * 0.53 if th > 0.85 else rl * (0.35 + 0.18 * th)
+            if self.since_shift > 1.0 and self.gear < top and rpm_d > up_r:
+                if rpm_d * gears[self.gear] / gears[self.gear - 1] > 0.43 * rl:
                     self.set_gear(self.gear + 1)
             elif self.since_shift > 0.7 and self.gear > 1 and rpm_d < dn_r:
-                if rpm_d * gears[self.gear - 2] / gears[self.gear - 1] < 2200:
+                if rpm_d * gears[self.gear - 2] / gears[self.gear - 1] < 0.9 * rl:
                     self.set_gear(self.gear - 1)
         if not self.auto:
-            if shift_up and self.gear < 6:
+            if shift_up and self.gear < top:
                 self.set_gear(self.gear + 1)
             if shift_dn and self.gear > -1:
                 self.set_gear(self.gear - 1)
@@ -216,12 +208,12 @@ class Car:
         self.lean = lean
 
     def engine_torque(self, rpm, thr):
-        c = self.cfg
-        cut = clamp((c['redline'] + 150 - rpm) / 150, 0, 1)
+        c, e = self.cfg, self.engine
+        cut = clamp((c['redline'] + 0.06 * c['redline'] - rpm) / (0.06 * c['redline']), 0, 1)
         self.limiter = rpm > c['redline'] and thr > 0.1
-        t = thr * cut * torque_at(rpm) * c['torque_scale'] - (1 - thr) * (60 + 0.06 * rpm)
+        t = thr * cut * e.torque_at(rpm) - (1 - thr) * (e.brake0 + e.brake1 * rpm)
         if rpm < c['idle']:
-            t += clamp((c['idle'] - rpm) * 3.0, 0, 500)
+            t += clamp((c['idle'] - rpm) * 3.0 * c['engine_i'] / 1.6, 0, 500 * c['engine_i'] / 1.6 + 120)
         return t
 
     # ------------------------------------------------------------ physics
@@ -345,11 +337,15 @@ class Car:
                 w.slip = w.vt = w.Fx = 0.0
             w.Fhx, w.Fhy = Fhx, Fhy
 
-        # ---- drivetrain
+        # ---- drivetrain (engine -> clutch -> gearbox -> range -> differential tree -> connected axles)
+        dr = self.drive
+        on = dr.axle_on
+        n_on = dr.n_on
         r, eta = self.ratio, c['eta']
         rpm = self.we * 30 / math.pi
         self.rpm = rpm
-        eng = clamp((rpm - 800) / 500, 0, 1)
+        rl, idle = c['redline'], c['idle']
+        eng = clamp((rpm - (idle + 150)) / (0.2 * rl), 0, 1)
         eng = eng * eng * (3 - 2 * eng)
         if self.gear != 0:
             eng = max(eng, 0.06)
@@ -361,38 +357,45 @@ class Car:
         thr_e = self.throttle
         if self.shift_t > 0.25:
             thr_e *= 0.1
+        om = [w.om for w in W]
         wbar = 0.0
-        for w in W:
-            wbar += w.om
-        wbar /= N
+        for i in range(N):
+            if on[i]:
+                wbar += om[i]
+        wbar /= n_on
         Te = self.engine_torque(rpm, thr_e)
-        if self.shift_t > 0 and r != 0:   # rev-match while the clutch is open
-            Te += clamp((abs(r * wbar) - self.we) * 8.0, -400, 700)
         Ie = c['engine_i']
+        if self.shift_t > 0 and r != 0:   # rev-match while the clutch is open
+            Te += clamp((abs(r * wbar) - self.we) * 8.0 * Ie / 1.6, -400 * Ie / 1.6, 700 * Ie / 1.6)
+        self.Te = Te
         Ti = [0.0] * N
-        Iei = Iw
+        Ii = [Iw] * N
         locked = False
         Tc = 0.0
         if r != 0:
             win = r * wbar
             slip = self.we - win
             cap = c['clutch_cap'] * eng
-            A = eta * r * r / (N * Iw)
+            A = eta * r * r / (n_on * Iw)
             gsum = 0.0
-            for w in W:
-                gsum += w.G
-            gavg = -R * gsum / (N * Iw)
+            for i in range(N):
+                if on[i]:
+                    gsum += W[i].G
+            gavg = -R * gsum / (n_on * Iw)
             Tlock = (slip / dt + Te / Ie - r * gavg) / (1 / Ie + A)
-            if win >= 0 and abs(Tlock) <= cap:
+            if win >= 0 and abs(slip) < 2.5 + 0.02 * self.we and abs(Tlock) <= cap:   # clutch only sticks once speeds match
                 locked = True
-                each = eta * r * Te / N
-                Iei = Iw + eta * Ie * r * r / N
+                each = eta * r * Te / n_on
+                Ieff = Iw + eta * Ie * r * r / n_on
+                for i in range(N):
+                    if on[i]:
+                        Ii[i] = Ieff
             else:
-                Tc = cap if slip >= 0 else -cap
-                each = eta * r * Tc / N
-            ck, cm = (c['lock_k'], c['lock_max']) if self.diff_lock else (c['cpl_k'], c['cpl_max'])
-            for i, w in enumerate(W):
-                Ti[i] = each + clamp(ck * (wbar - w.om), -cm, cm)
+                # slipping: transmit only the torque that would close the slip this step (implicit, so it
+                # can't overshoot and chatter with big ratios), limited by the clutch capacity
+                Tc = clamp((slip / dt + Te / Ie) / (1 / Ie + A), -cap, cap)
+                each = eta * r * Tc / n_on
+            dr.distribute(each, om, Ti)
         self.locked = locked
 
         # ---- tyre friction (linearised implicit) + wheel spin
@@ -401,6 +404,7 @@ class Car:
         reaction = 0.0
         for i, w in enumerate(W):
             Tdrv = Ti[i]
+            Iei = Ii[i]
             Fxt = 0.0
             if w.touching:
                 Fxt = (w.G + w.g * R * dt * Tdrv / Iei) / (1 + w.g * dt * (1 / mq + R * R / Iei))
@@ -408,21 +412,26 @@ class Car:
                 w.Fhx += (Fxt + rr) * w.tx
                 w.Fhy += (Fxt + rr) * w.ty
                 w.Fx = Fxt
-            om = w.om + dt * (Tdrv - R * Fxt) / Iei
-            Tb = brake * c['brake_t'] + (hand * c['brake_t'] * 1.3 if i > 0 else 0.0)
+            w.Tdrv = Tdrv
+            omi = w.om + dt * (Tdrv - R * Fxt) / Iei
+            Tb = brake * c['brake_t'] + (hand * c['brake_t'] * 1.3 if w.mx < 0 else 0.0)
             if Tb > 0:
                 dm = Tb * dt / Iei
-                if abs(om) <= dm:
-                    om = 0.0
+                if abs(omi) <= dm:
+                    omi = 0.0
                 else:
-                    om -= math.copysign(dm, om)
-            w.om = om
-            w.ang += om * dt
+                    omi -= math.copysign(dm, omi)
+            w.om = omi
+            w.ang += omi * dt
             reaction += Tdrv
         if r == 0:
             self.we += dt * Te / Ie
         elif locked:
-            self.we = r * sum(w.om for w in W) / N
+            sm = 0.0
+            for i in range(N):
+                if on[i]:
+                    sm += W[i].om
+            self.we = r * sm / n_on
         else:
             self.we += dt * (Te - Tc) / Ie
         if self.we < 40:
@@ -432,7 +441,7 @@ class Car:
         # ---- chassis vs terrain
         hit_f = 0.0
         hit = hit_v = None
-        for lx, ly in BODY_PTS:
+        for lx, ly in self.body_pts:
             rx = lx * ca - ly * sa
             ry = lx * sa + ly * ca
             px = px_ + rx

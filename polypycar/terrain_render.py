@@ -206,13 +206,13 @@ class ChunkRenderer:
             self.soil[ci] = c
         return c
 
-    def draw_soil(self, scr, view):
+    def draw_soil(self, scr, view, step=2):
         """Soft soil between the hard pan and the live surface, redrawn every frame."""
         t = self.t
         W, H, s = view.W, view.H, view.s
-        ia = (math.floor((view.cx - W / 2 / s) / T.DX) - 2) & ~1
-        ib = math.ceil((view.cx + W / 2 / s) / T.DX) + 2
-        n = ib - ia + 3
+        ia = (math.floor((view.cx - W / 2 / s) / T.DX) - 4) & ~3
+        ib = math.ceil((view.cx + W / 2 / s) / T.DX) + 4
+        n = ib - ia + 5
         hp, fp, dp = t.h_at, t.floor_at, t.dens_at
         hs = [hp(i) for i in range(ia, ia + n)]
         fs = [fp(i) for i in range(ia, ia + n)]
@@ -220,13 +220,13 @@ class ChunkRenderer:
         poly = pygame.draw.polygon
         cx, cy = view.cx, view.cy
         ox, oy = W * 0.5, view.H * ANCHOR_Y
-        dxs = T.DX * 2 * s
+        dxs = T.DX * step * s
         sc = s
         cols = None
         ci_prev = None
         L0, L1 = LIGHT
-        for k in range(0, n - 2, 2):
-            ya, yb, fa, fb = hs[k], hs[k + 2], fs[k], fs[k + 2]
+        for k in range(0, n - step, step):
+            ya, yb, fa, fb = hs[k], hs[k + step], fs[k], fs[k + step]
             th = ya - fa
             if th < 0.004 and yb - fb < 0.004:
                 continue
@@ -246,7 +246,7 @@ class ChunkRenderer:
                 r = bare[0] + (r - bare[0]) * f
                 g = bare[1] + (g - bare[1]) * f
                 b = bare[2] + (b - bare[2]) * f
-            sl = (yb - ya) / (T.DX * 2)
+            sl = (yb - ya) / (T.DX * step)
             il = 1.0 / math.sqrt(1.0 + sl * sl)
             lit = 0.8 + 0.34 * (-sl * il * L0 + il * L1)
             xa = (i * T.DX - cx) * sc + ox

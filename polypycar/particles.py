@@ -12,6 +12,7 @@ class Particles:
         self.p = []   # [x, y, vx, vy, life, max, size, (r,g,b), kind]  kind 0 dust, 1 mud, 2 spark
         self.overlay = None
         self.rnd = random.Random(7)
+        self.mult = 1.0
 
     def emit(self, x, y, vx, vy, life, size, col, kind=0):
         if len(self.p) < MAX:
@@ -56,7 +57,8 @@ class Particles:
             a = int(200 * f * (0.7 if kind == 0 else 0.55 if kind == 3 else 1.0))
             col = (int(q[7][0]), int(q[7][1]), int(q[7][2]), a)
             ang = q[0] * 3.0
-            pts = [(x + math.cos(ang + i * math.tau / 5) * r, y + math.sin(ang + i * math.tau / 5) * r) for i in range(5)]
+            ca_, sa_ = math.cos(ang) * r, math.sin(ang) * r
+            pts = ((x + ca_, y + sa_), (x - sa_, y + ca_), (x - ca_, y - sa_), (x + sa_, y - ca_))
             pygame.draw.polygon(ov, col, pts)
         surf.blit(ov, (0, 0))
 
@@ -77,7 +79,7 @@ class Particles:
             else:
                 inten = (max(0.0, slip - 0.6) * 0.7 + spd * 0.05) * (0.25 + w.soft)
                 col = soil_colors(pal, m)[0]
-            n = inten * 55 * dt
+            n = inten * 55 * dt * self.mult
             cnt = int(n) + (1 if rnd.random() < n - int(n) else 0)
             for _ in range(min(cnt, 5)):
                 px, py = w.con[3], w.con[4]
@@ -93,7 +95,7 @@ class Particles:
         # diesel smoke
         thr = car.throttle
         if thr > 0.12 and exhaust:
-            n = (0.4 + 2.2 * thr * thr) * 24 * dt
+            n = (0.4 + 2.2 * thr * thr) * 24 * dt * self.mult
             cnt = int(n) + (1 if rnd.random() < n - int(n) else 0)
             for _ in range(cnt):
                 g = 70 + int(30 * (1 - thr))

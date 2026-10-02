@@ -56,9 +56,9 @@ class Scenery:
         self.fog_surf.set_alpha(int(255 * clamp(pal['fog'] * 1.6, 0, 1)))
         screen.blit(self.fog_surf, (0, 0))
 
-    def draw_snow(self, screen, pal, cam_x, cam_y, s, car_vx):
+    def draw_snow(self, screen, pal, cam_x, cam_y, s, density=1.0):
         """Falling snow in three parallax depths; intensity per biome."""
-        k = pal['snowfall']
+        k = pal['snowfall'] * density
         if k <= 0.02:
             return
         W, H = screen.get_size()
@@ -88,12 +88,15 @@ class Scenery:
                 pygame.draw.polygon(screen, rgb(white), top)
                 pygame.draw.polygon(screen, rgb(mixc(white, (190, 205, 235), 0.55)), [(x - ww, y), (x + ww, y), (x + ww * 0.55, y + h2 * 0.35), (x - ww * 0.5, y + h2 * 0.3)])
 
-    def draw_mountains(self, screen, cam_x, cam_y, s, pal):
+    def draw_mountains(self, screen, cam_x, cam_y, s, pal, n_layers=4):
         W, H = screen.get_size()
         sky = mixc(pal['sky0'], pal['sky1'], 0.65)
         if self._mt_s != s:
             self._mt, self._mt_s = {}, s
+        pick = {2: (0, 3), 3: (0, 1, 3)}.get(n_layers, (0, 1, 2, 3))
         for li, (f, anchor, amp, wl, fog, seed) in enumerate(LAYERS):
+            if li not in pick:
+                continue
             col = mixc(pal['mtn'], sky, fog)
             if li == 3:
                 col = mixc(pal['tree'], sky, 0.25)

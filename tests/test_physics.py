@@ -83,16 +83,30 @@ def test_pressure_low_range_and_lock_get_you_through_snow():
 
 
 def test_diff_lock_helps_in_mud():
-    _, a = drive(T.MUD, 20, pressure=0.7, lock=False)
-    _, b = drive(T.MUD, 20, pressure=0.7, lock=True)
+    _, a = drive(T.MUD, 20, throttle=0.6, pressure=1.0, lock=False)
+    _, b = drive(T.MUD, 20, throttle=0.6, pressure=1.0, lock=True)
     assert b > a * 1.2
 
 
+def _peak_slip(mat, secs, throttle):
+    car = Car(Flat(mat))
+    car.reset(-100)
+    for _ in range(120):
+        car.control(1 / 60, 0, 0, 0, 0)
+        car.step(1 / 60)
+    peak = 0.0
+    for _ in range(int(secs * 60)):
+        car.control(1 / 60, throttle, 0, 0, 0)
+        car.step(1 / 60)
+        peak = max(peak, max(abs(w.slip) for w in car.wheels))
+    return car.x + 100, peak
+
+
 def test_ice_is_slippery():
-    ice, d_ice = drive(T.ICE, 6, throttle=1.0)
-    dirt, d_dirt = drive(T.DIRT, 6, throttle=1.0)
-    assert d_ice < d_dirt * 0.75
-    assert max(abs(w.slip) for w in ice.wheels) > 3 * max(abs(w.slip) for w in dirt.wheels)
+    d_ice, slip_ice = _peak_slip(T.ICE, 6, 1.0)
+    d_dirt, slip_dirt = _peak_slip(T.DIRT, 6, 1.0)
+    assert d_ice < d_dirt * 0.7
+    assert slip_ice > 2 * slip_dirt
 
 
 def test_reverse():

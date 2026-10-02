@@ -12,6 +12,7 @@ obstacles, blended over biomes (taiga, mudlands, highland, whiteout).
 No pygame in here so it can be unit-tested headless.
 """
 import math
+from . import worlds
 from .util import clamp, lerp, smooth, hash_i, noise1, Rng, hexc, mixc
 
 DX = 0.1          # sample spacing (m)
@@ -64,20 +65,23 @@ for _b in _BIOME_SRC:
 BIOME_LEN = 1000.0
 BIOME_BLEND = 80.0
 _biome_seed = [0]
+_world = [worlds.make()]
 
 
 def _biome_id(k):
-    if k == 0:
-        return HIGHLAND            # gentle start on dirt
-    if k == 1:
-        return TAIGA               # snow shows up early
+    w = _world[0].map
+    seq = w.sequence
+    if 0 <= k < len(seq):
+        return seq[k]                         # forced opening order
     if k == -1:
-        return MUDLANDS
-    return int(hash_i(k, _biome_seed[0] + 77) * len(BIOMES)) % len(BIOMES)
+        return seq[0] if len(w.biomes) == 1 else MUDLANDS if MUDLANDS in w.biomes else w.biomes[0]
+    pool = w.biomes
+    return pool[int(hash_i(k, _biome_seed[0] + 77) * len(pool)) % len(pool)]
 
 
 def biome_at(x):
     """-> (a, b, t): blend of biome a -> b with weight t."""
+    x = x + BIOME_LEN * 0.5                 # segment 0 is centred on the start line
     k = math.floor((x + BIOME_BLEND) / BIOME_LEN)
     bx = k * BIOME_LEN
     t = smooth((x - bx + BIOME_BLEND) / (BIOME_BLEND * 2))
@@ -176,8 +180,10 @@ THEME_NAMES = list(THEMES)
 
 
 class Terrain:
-    def __init__(self, seed=1337):
+    def __init__(self, seed=1337, world=None):
         self.seed = int(seed)
+        self.world = world or worlds.make()
+        _world[0] = self.world
         _biome_seed[0] = self.seed
         self.chunks = {}
         self.zones = {}
@@ -188,9 +194,9 @@ class Terrain:
         self.yield_rate = 4.0
         self.compact_rate = 0.55
 
-    @staticmethod
-    def difficulty(x):
-        return clamp((abs(x) - 120) / 3200, 0, 1)
+    def difficulty(self, x):
+        d = self.world.diff
+        return clamp(d.start + (1.0 - d.start) * clamp((abs(x) - 120) / d.span, 0, 1), 0, 1)
 
     # ---- zone-level parameters (blended smoothly between neighbouring zones)
     def zone_param(self, z):
@@ -214,7 +220,8 @@ class Terrain:
                     theme = THEME_NAMES[i]
                     break
         bid = biome_id_at(xc)
-        weights = BIOMES[bid]['surf']
+        ov = self.world.map.surf
+        weights = (ov.get(bid) if ov and bid in ov else BIOMES[bid]['surf'])
         pick = H(25) * sum(weights.values())
         surface = DIRT
         for m, v in weights.items():
@@ -225,12 +232,14 @@ class Terrain:
         if near:
             surface = DIRT if abs(xc) < 60 else PACKED
         soft = 1.0
+        wm = self.world.map.soft * self.world.diff.soft
         if surface == SNOW:
-            soft = (0.6 + 0.9 * H(27)) * (0.8 + 0.4 * d)
+            soft = (0.6 + 0.9 * H(27)) * (0.8 + 0.4 * d) * wm
         elif surface == MUD:
-            soft = (0.8 + 0.5 * H(28)) * (0.85 + 0.3 * d)
-        p = dict(hill=0.3 + 0.7 * H(21), rough=H(22) ** 1.6 * (0.1 + 0.6 * d),
-                 climb=H(24) * (0.2 + 0.8 * d) if H(23) > 0.45 else 0.0,
+            soft = (0.8 + 0.5 * H(28)) * (0.85 + 0.3 * d) * wm
+        rel = self.world.map.relief
+        p = dict(hill=(0.3 + 0.7 * H(21)) * rel, rough=H(22) ** 1.6 * (0.1 + 0.6 * d),
+                 climb=(H(24) * (0.2 + 0.8 * d) if H(23) > 0.45 else 0.0) * rel,
                  theme=theme, surface=surface, soft=soft)
         self.zp[z] = p
         return p
@@ -265,7 +274,7 @@ class Terrain:
             guard += 1
             typ = pool[int(r() * len(pool))]
             end = self._add_feature(lst, typ, cursor, r, sc, d, x_end, snowy, zp)
-            gap_scale = 1.8 if zp['theme'] == 'cruise' else 1.0
+            gap_scale = (1.8 if zp['theme'] == 'cruise' else 1.0) * self.world.diff.gaps
             cursor = end + lerp(16, 5.5, d) * (0.6 + 0.8 * r()) * gap_scale
         return lst
 
