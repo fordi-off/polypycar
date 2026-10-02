@@ -12,7 +12,7 @@ from .particles import Particles
 from .hud import Hud
 from .audio import Audio
 
-VIEW_METERS = 16.0
+VIEW_METERS = 22.0
 ANCHOR = 0.58   # camera point sits this far down the screen
 
 
@@ -30,7 +30,7 @@ class Game:
         pygame.init()
         flags = pygame.RESIZABLE | (pygame.FULLSCREEN if fullscreen else 0)
         self.screen = pygame.display.set_mode(size, flags)
-        pygame.display.set_caption('PolyPyCar')
+        pygame.display.set_caption('PolyPyCar - snow & mud')
         self.clock = pygame.time.Clock()
         self.terrain = Terrain(seed)
         self.car = Car(self.terrain)
@@ -48,6 +48,7 @@ class Game:
         self.running = True
         self.time = 0.0
         self.autodrive = False
+        self.auto_thr = 1.0
         # settle the car and warm the chunk cache so the first frame is clean
         for _ in range(120):
             self.car.control(1 / 60, 0, 0, 0, 0)
@@ -70,6 +71,10 @@ class Game:
                     self.car.reset(self.car.x)
                 elif k == pygame.K_t:
                     self.car.auto = not self.car.auto
+                elif k == pygame.K_l:
+                    self.car.toggle_diff_lock()
+                elif k == pygame.K_g:
+                    self.car.toggle_low()
                 elif k == pygame.K_c:
                     self.carr.next_paint()
                 elif k == pygame.K_h:
@@ -97,7 +102,7 @@ class Game:
         hand = 1.0 if k[pygame.K_SPACE] else 0.0
         lean = (1.0 if (k[pygame.K_LEFT] or k[pygame.K_a]) else 0.0) - (1.0 if (k[pygame.K_RIGHT] or k[pygame.K_d]) else 0.0)
         if self.autodrive:
-            up, dn = 1.0, 0.0
+            up, dn = self.auto_thr, 0.0
         return up, dn, hand, lean
 
     # ------------------------------------------------------------------ frame
@@ -111,7 +116,7 @@ class Game:
         self.pal = T.palette_at(car.x)
         self.scenery.update(dt)
         self.carr.update(car, dt)
-        self.parts.wheel_fx(car, dt, self.pal['top'], self.terrain)
+        self.parts.wheel_fx(car, dt, self.pal, self.carr.exhaust_world(car))
         self.parts.update(dt)
         self.audio.update(car)
         self.hud.hint_t = max(0.0, self.hud.hint_t - dt) if self.time > 2 else self.hud.hint_t
@@ -134,6 +139,7 @@ class Game:
         self.scenery.draw_sky(scr, pal)
         self.scenery.draw_clouds(scr, v.cx, v.cy, v.s)
         self.scenery.draw_mountains(scr, v.cx, v.cy, v.s, pal)
+        self.scenery.draw_fog(scr, pal)
 
         W, H, s = v.W, v.H, v.s
         c0 = math.floor((v.cx - W / 2 / s) / T.CHUNK_W)
@@ -153,8 +159,10 @@ class Game:
         self.chunks.prefetch([edge + d, edge + 2 * d, edge - d * (c1 - c0 + 1)], budget=0.005)
         self.chunks.prune((c0 + c1) // 2, keep=4)
 
+        self.chunks.draw_soil(scr, v)
         self.parts.draw(scr, v)
         self.carr.draw(scr, v, self.car, self.terrain)
+        self.scenery.draw_snow(scr, pal, v.cx, v.cy, v.s, self.car.vx)
         self.hud.draw(scr, self.car, self)
 
     def run(self):

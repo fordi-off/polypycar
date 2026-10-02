@@ -1,11 +1,14 @@
-"""Procedural infinite terrain: a deterministic heightfield sampled every 10 cm.
+"""Procedural infinite terrain with deformable soil.
 
-  base(x)    smooth rolling hills (zone parameterised, blended between zones)
-  features   rocks, logs, whoops, ledges, ramps, mud pits... stamped additively into
-             96 m "zones" (each zone gets a theme, so roads feel different)
-  material   per-sample surface id (grip / rolling resistance / colours)
-  biome      palette + grip multiplier blended over long distances
+Every 10 cm sample carries:
+  h     current surface height (changes when wheels dig / press / pile soil)
+  h0    original surface height
+  fl    hard "pan" below the soil. Soil thickness = h - fl (snow / mud / dirt are soft, rock is not)
+  dens  compaction 0..1 (wheels pack the soil: second pass is firmer, rear axles use front tracks)
+  mat   surface material
 
+World is built from 96 m zones with themes (timber, mire, drifts, steep...) stamped with
+obstacles, blended over biomes (taiga, mudlands, highland, whiteout).
 No pygame in here so it can be unit-tested headless.
 """
 import math
@@ -16,33 +19,40 @@ SC = 240          # samples per chunk (24 m)
 ZL = 96.0         # zone length (m)
 CHUNK_W = DX * SC
 
-GROUND, ROCK, WOOD, MUD, GRAVEL, ROAD = range(6)
-# mu: base friction, loose: how much low tyre pressure helps, crr: rolling resistance,
-# drag: viscous drag (mud), bgrip: biome grip multiplier applies
+DIRT, ROCK, WOOD, MUD, GRAVEL, SNOW, ICE, PACKED = range(8)
+# mu: friction, S: nominal soft depth (m), ks: soil stiffness (N/m), pb: bearing pressure (Pa),
+# crr: rolling resistance, drag: viscous drag (N s/m), dig: digging rate when a wheel spins (m/s per m/s slip)
 MATERIALS = [
-    dict(name='ground', mu=0.90, loose=0.6, crr=0.016, drag=0, bgrip=True),
-    dict(name='rock', mu=1.00, loose=0.1, crr=0.010, drag=0, bgrip=False),
-    dict(name='wood', mu=0.75, loose=0.05, crr=0.012, drag=0, bgrip=False),
-    dict(name='mud', mu=0.50, loose=1.0, crr=0.070, drag=900, bgrip=False),
-    dict(name='gravel', mu=0.74, loose=0.55, crr=0.032, drag=0, bgrip=True),
-    dict(name='road', mu=1.00, loose=0.3, crr=0.013, drag=0, bgrip=True),
+    dict(name='dirt',   mu=0.85, S=0.12, ks=1.2e6, pb=170e3, crr=0.024, drag=0,    dig=0.012, loose=0.5),
+    dict(name='rock',   mu=1.00, S=0.0,  ks=1e9,   pb=1e9,   crr=0.012, drag=0,    dig=0.0,  loose=0.1),
+    dict(name='wood',   mu=0.70, S=0.0,  ks=1e9,   pb=1e9,   crr=0.012, drag=0,    dig=0.0,  loose=0.05),
+    dict(name='mud',    mu=0.52, S=0.55, ks=4.0e5, pb=20e3,  crr=0.060, drag=2200, dig=0.06, loose=1.0),
+    dict(name='gravel', mu=0.72, S=0.06, ks=2.0e6, pb=320e3, crr=0.035, drag=0,    dig=0.015, loose=0.55),
+    dict(name='snow',   mu=0.36, S=0.60, ks=4.5e5, pb=12e3,  crr=0.035, drag=500,  dig=0.07, loose=1.0),
+    dict(name='ice',    mu=0.13, S=0.0,  ks=1e9,   pb=1e9,   crr=0.008, drag=0,    dig=0.0,  loose=0.0),
+    dict(name='packed', mu=0.58, S=0.12, ks=9e5,   pb=110e3, crr=0.020, drag=0,    dig=0.02, loose=0.3),
 ]
 
 # ------------------------------------------------------------------ biomes
-COLOR_KEYS = ['top', 'dirt', 'deep', 'rock', 'sky0', 'sky1', 'mtn', 'tree', 'trunk', 'tuft', 'sun']
+TAIGA, MUDLANDS, HIGHLAND, WHITEOUT = range(4)
+COLOR_KEYS = ['top', 'dirt', 'deep', 'rock', 'sky0', 'sky1', 'mtn', 'tree', 'trunk', 'snow', 'sun']
 _BIOME_SRC = [
-    dict(name='meadow', grip=1.0, decor=['broadleaf', 'broadleaf', 'pine', 'bush'], density=0.34,
-         top='#78c85a', dirt='#93613d', deep='#523724', rock='#8e95a3', sky0='#4a9fe6', sky1='#d4f0ff',
-         mtn='#7aa5cf', tree='#35a05a', trunk='#6c4a33', tuft='#5fb84a', sun='#fff1b0'),
-    dict(name='desert', grip=0.84, decor=['cactus', 'cactus', 'bush', 'dune'], density=0.18,
-         top='#ecc572', dirt='#cc8a4c', deep='#7c4b2d', rock='#b9774e', sky0='#3f86cf', sky1='#ffe5b0',
-         mtn='#dba073', tree='#58a04a', trunk='#7d5a38', tuft='#c9a64f', sun='#fff3c8'),
-    dict(name='canyon', grip=0.95, decor=['spire', 'spire', 'bush', 'rockdecor'], density=0.2,
-         top='#df7f50', dirt='#ac4e34', deep='#5e2b24', rock='#82525a', sky0='#3763a8', sky1='#ffd0a6',
-         mtn='#b4645d', tree='#6c9a4a', trunk='#6b4636', tuft='#c0743f', sun='#ffe2b8'),
-    dict(name='tundra', grip=0.55, decor=['pine', 'pine', 'pine', 'rockdecor'], density=0.3,
-         top='#f3f8ff', dirt='#9aa8c0', deep='#4a566f', rock='#6f7c94', sky0='#7a9bd6', sky1='#eef5ff',
-         mtn='#a6bbe0', tree='#2c6c6d', trunk='#5a4636', tuft='#d5e4f7', sun='#ffffff'),
+    dict(name='taiga', decor=['pine', 'pine', 'pine', 'rockdecor'], density=0.30, fog=0.30, snowfall=0.75,
+         top='#c9d3df', dirt='#6d5b4c', deep='#3a3330', rock='#7b8696', sky0='#869cb6', sky1='#dde7f0',
+         mtn='#8aa0ba', tree='#2c5c52', trunk='#4a382c', snow='#f2f6fc', sun='#f4f7fb',
+         surf={SNOW: .50, PACKED: .15, ICE: .06, DIRT: .19, MUD: .10}),
+    dict(name='mudlands', decor=['deadtree', 'pine', 'deadtree', 'bush'], density=0.22, fog=0.38, snowfall=0.0,
+         top='#7a6444', dirt='#5c4636', deep='#33271f', rock='#6c6a68', sky0='#7d8c8a', sky1='#cdd2c6',
+         mtn='#6f7f78', tree='#3d5a3a', trunk='#3a2b20', snow='#e6eaf0', sun='#e8e6d8',
+         surf={MUD: .42, DIRT: .30, GRAVEL: .13, SNOW: .10, PACKED: .05}),
+    dict(name='highland', decor=['broadleaf', 'broadleaf', 'pine', 'bush'], density=0.28, fog=0.12, snowfall=0.0,
+         top='#9a8a52', dirt='#8a5f3e', deep='#4d3626', rock='#8a8f98', sky0='#6f9fd0', sky1='#e6ebf0',
+         mtn='#8a9ab0', tree='#c0782c', trunk='#5c4030', snow='#f2f6fb', sun='#fff1c0',
+         surf={DIRT: .45, GRAVEL: .20, MUD: .20, SNOW: .10, PACKED: .05}),
+    dict(name='whiteout', decor=['pine', 'pine', 'rockdecor'], density=0.12, fog=0.58, snowfall=1.0,
+         top='#e8eef6', dirt='#7d8798', deep='#444e5f', rock='#8a93a2', sky0='#b2c0d0', sky1='#eef2f6',
+         mtn='#b6c4d6', tree='#35605e', trunk='#4a4038', snow='#f7faff', sun='#f8fafd',
+         surf={SNOW: .72, PACKED: .10, ICE: .10, DIRT: .08}),
 ]
 BIOMES = []
 for _b in _BIOME_SRC:
@@ -51,14 +61,18 @@ for _b in _BIOME_SRC:
         d[k] = hexc(d[k])
     BIOMES.append(d)
 
-BIOME_LEN = 1200.0
-BIOME_BLEND = 90.0
+BIOME_LEN = 1000.0
+BIOME_BLEND = 80.0
 _biome_seed = [0]
 
 
 def _biome_id(k):
-    if k == 0 or k == -1:
-        return 0  # always start in the meadow
+    if k == 0:
+        return HIGHLAND            # gentle start on dirt
+    if k == 1:
+        return TAIGA               # snow shows up early
+    if k == -1:
+        return MUDLANDS
     return int(hash_i(k, _biome_seed[0] + 77) * len(BIOMES)) % len(BIOMES)
 
 
@@ -73,19 +87,20 @@ def biome_at(x):
     return a, b, t
 
 
+def biome_id_at(x):
+    a, b, t = biome_at(x)
+    return b if t > 0.5 else a
+
+
 def palette_at(x):
     a, b, t = biome_at(x)
     A, B = BIOMES[a], BIOMES[b]
-    o = {'grip': lerp(A['grip'], B['grip'], t), 'decor': B['decor'] if t > 0.5 else A['decor'],
-         'density': lerp(A['density'], B['density'], t), 'name': B['name'] if t > 0.5 else A['name']}
+    o = {'decor': B['decor'] if t > 0.5 else A['decor'], 'name': B['name'] if t > 0.5 else A['name'],
+         'density': lerp(A['density'], B['density'], t), 'fog': lerp(A['fog'], B['fog'], t),
+         'snowfall': lerp(A['snowfall'], B['snowfall'], t)}
     for k in COLOR_KEYS:
         o[k] = mixc(A[k], B[k], t)
     return o
-
-
-def grip_at(x):
-    a, b, t = biome_at(x)
-    return lerp(BIOMES[a]['grip'], BIOMES[b]['grip'], t)
 
 
 # ---------------------------------------------------------------- features
@@ -121,9 +136,9 @@ def _f_ripple(f, x):
     return f['h'] * 0.5 * (1 - math.cos(u * f['n'] * math.tau)) * smooth(win)
 
 
-def _f_pothole(f, x):
+def _f_hole(f, x):
     v = abs((x - f['x0']) / (f['x1'] - f['x0']) * 2 - 1)
-    return -f['h'] * (1 - v ** 4)
+    return -f['h'] * (1 - v ** 3)
 
 
 def _f_log(f, x):
@@ -136,32 +151,26 @@ def _f_log(f, x):
 
 
 def _f_ledge(f, x):
-    up = smooth((x - f['x0']) / 0.38)
-    dn = smooth((x - (f['x1'] - 0.7)) / 0.7)
+    up = smooth((x - f['x0']) / 0.45)
+    dn = smooth((x - (f['x1'] - 0.9)) / 0.9)
     return f['h'] * up * (1 - dn)
 
 
-def _f_kicker(f, x):
-    u = (x - f['x0']) / (f['x1'] - f['x0'])
-    return f['h'] * u ** 1.25
+def _f_flat(f, x):
+    return 0.0
 
 
-def _f_mud(f, x):
-    u = (x - f['x0']) / (f['x1'] - f['x0'])
-    return -0.16 * (0.5 - 0.5 * math.cos(u * math.tau))
-
-
-FEATURE = dict(rock=_f_rock, mound=_f_mound, ripple=_f_ripple, pothole=_f_pothole, log=_f_log,
-               ledge=_f_ledge, kicker=_f_kicker, mud=_f_mud)
+FEATURE = dict(rock=_f_rock, mound=_f_mound, ripple=_f_ripple, hole=_f_hole, log=_f_log,
+               ledge=_f_ledge, flat=_f_flat)
 
 THEMES = {
-    'cruise': ['mound', 'mound', 'ripple', 'rock'],
-    'rocky': ['rock', 'rock', 'rockfield', 'ledge', 'rock'],
-    'whoops': ['ripple', 'whoops', 'whoops', 'mound', 'rock'],
-    'jumps': ['kicker', 'mound', 'kicker', 'ripple'],
-    'swamp': ['mud', 'mud', 'pothole', 'log', 'pothole'],
-    'logs': ['log', 'log', 'ledge', 'rock', 'logs'],
-    'mixed': ['rock', 'log', 'whoops', 'ledge', 'pothole', 'mound', 'kicker', 'mud', 'rockfield', 'ripple'],
+    'cruise': ['mound', 'mound', 'ripple', 'rock', 'ice'],
+    'rocky': ['rock', 'rock', 'rockfield', 'ledge', 'rock', 'climb'],
+    'timber': ['log', 'logs', 'log', 'ledge', 'rock'],
+    'mire': ['rut', 'rut', 'mudstretch', 'log', 'drift', 'rut'],
+    'drifts': ['drift', 'drift', 'drift', 'mound', 'ice', 'rock'],
+    'steep': ['climb', 'climb', 'mound', 'ledge', 'rock', 'drift'],
+    'mixed': ['rock', 'log', 'rut', 'ledge', 'climb', 'drift', 'mudstretch', 'rockfield', 'ice', 'logs'],
 }
 THEME_NAMES = list(THEMES)
 
@@ -175,7 +184,9 @@ class Terrain:
         self.zp = {}
         self._ci = None
         self._ch = None
-        self._surf = {'mat': 0, 'mu': 0.9, 'loose': 0.6, 'crr': 0.016, 'drag': 0.0}
+        self._surf = {}
+        self.yield_rate = 4.0
+        self.compact_rate = 0.55
 
     @staticmethod
     def difficulty(x):
@@ -190,21 +201,37 @@ class Terrain:
 
         def H(k):
             return hash_i(z, s + k)
-        d = self.difficulty((z + 0.5) * ZL)
-        near = abs((z + 0.5) * ZL) < 100
+        xc = (z + 0.5) * ZL
+        d = self.difficulty(xc)
+        near = abs(xc) < 100
         theme = 'cruise'
         if not near:
-            w = [3 * (1 - d) + 0.4, 1, 1, 1, 0.8 + d, 0.8 + d, 1 + d]
+            w = [3 * (1 - d) + 0.4, 1, 1, 1 + d, 1, 1 + 0.5 * d, 1 + d]
             pick = H(26) * sum(w)
             for i, v in enumerate(w):
                 pick -= v
                 if pick <= 0:
                     theme = THEME_NAMES[i]
                     break
-        sr = H(25)
-        surface = GROUND if theme == 'swamp' else GROUND if sr < 0.5 else ROAD if sr < 0.8 else GRAVEL
-        p = dict(hill=0.3 + 0.7 * H(21), rough=H(22) ** 1.6 * (0.12 + 0.88 * d),
-                 climb=H(24) * (0.15 + 0.85 * d) if H(23) > 0.55 else 0.0, theme=theme, surface=surface)
+        bid = biome_id_at(xc)
+        weights = BIOMES[bid]['surf']
+        pick = H(25) * sum(weights.values())
+        surface = DIRT
+        for m, v in weights.items():
+            pick -= v
+            if pick <= 0:
+                surface = m
+                break
+        if near:
+            surface = DIRT if abs(xc) < 60 else PACKED
+        soft = 1.0
+        if surface == SNOW:
+            soft = (0.6 + 0.9 * H(27)) * (0.8 + 0.4 * d)
+        elif surface == MUD:
+            soft = (0.8 + 0.5 * H(28)) * (0.85 + 0.3 * d)
+        p = dict(hill=0.3 + 0.7 * H(21), rough=H(22) ** 1.6 * (0.1 + 0.6 * d),
+                 climb=H(24) * (0.2 + 0.8 * d) if H(23) > 0.45 else 0.0,
+                 theme=theme, surface=surface, soft=soft)
         self.zp[z] = p
         return p
 
@@ -230,19 +257,20 @@ class Terrain:
             return lst
         r = Rng(int(hash_i(z, self.seed + 5) * 4294967296))
         sc = 0.55 + 0.6 * d
+        snowy = biome_id_at(x0 + ZL / 2) in (TAIGA, WHITEOUT)
         pool = THEMES[zp['theme']]
         cursor = x0 + 6 + r() * 10
         guard = 0
         while cursor < x_end - 4 and guard < 40:
             guard += 1
             typ = pool[int(r() * len(pool))]
-            end = self._add_feature(lst, typ, cursor, r, sc, d, x_end)
+            end = self._add_feature(lst, typ, cursor, r, sc, d, x_end, snowy, zp)
             gap_scale = 1.8 if zp['theme'] == 'cruise' else 1.0
-            cursor = end + lerp(16, 4.5, d) * (0.6 + 0.8 * r()) * gap_scale
+            cursor = end + lerp(16, 5.5, d) * (0.6 + 0.8 * r()) * gap_scale
         return lst
 
     @staticmethod
-    def _add_feature(lst, typ, x0, r, sc, d, x_end):
+    def _add_feature(lst, typ, x0, r, sc, d, x_end, snowy, zp):
         def push(f):
             if f['x1'] <= x_end:
                 lst.append(f)
@@ -260,37 +288,40 @@ class Terrain:
                 x = push(dict(t='rock', x0=x, x1=x + w, pts=_rock_profile(r, H), mat=ROCK)) + 0.5 + r() * 2.5
             return x
         if typ == 'mound':
-            w = 8 + r() * 14
-            return push(dict(t='mound', x0=x0, x1=x0 + w, h=(0.8 + 2.2 * r()) * sc))
+            w = 9 + r() * 14
+            return push(dict(t='mound', x0=x0, x1=x0 + w, h=(0.7 + 1.6 * r()) * sc))
+        if typ == 'climb':
+            w = 18 + r() * 16
+            return push(dict(t='mound', x0=x0, x1=x0 + w, h=(2.0 + 3.2 * r()) * (0.6 + 0.6 * sc)))
         if typ == 'ripple':
-            wl = 0.7 + r() * 0.5
-            ln = 10 + r() * 14
-            return push(dict(t='ripple', x0=x0, x1=x0 + ln, h=(0.05 + 0.07 * r()) * (0.6 + sc), n=round(ln / wl)))
-        if typ == 'whoops':
-            wl = 2.2 + r() * 2.8
-            n = 3 + int(r() * 5)
-            return push(dict(t='ripple', x0=x0, x1=x0 + wl * n, h=(0.14 + 0.28 * r()) * sc, n=n))
-        if typ == 'pothole':
-            w = 1.5 + r() * 2.2
-            return push(dict(t='pothole', x0=x0, x1=x0 + w, h=(0.15 + 0.35 * r()) * sc, mat=MUD))
+            ln = 8 + r() * 12
+            return push(dict(t='ripple', x0=x0, x1=x0 + ln, h=(0.06 + 0.12 * r()) * (0.6 + sc), n=round(ln / (1.6 + r() * 1.6))))
         if typ == 'log':
-            rad = (0.2 + 0.17 * r()) * (0.8 + 0.5 * d)
+            rad = (0.22 + 0.2 * r()) * (0.8 + 0.5 * d)
             return push(dict(t='log', x0=x0, x1=x0 + rad * 2, r=rad, mat=WOOD))
         if typ == 'logs':
             x = x0
             for _ in range(2 + int(r() * 2)):
-                rad = (0.2 + 0.17 * r()) * (0.8 + 0.5 * d)
-                x = push(dict(t='log', x0=x, x1=x + rad * 2, r=rad, mat=WOOD)) + 1.8 + r() * 2.5
+                rad = (0.22 + 0.2 * r()) * (0.8 + 0.5 * d)
+                x = push(dict(t='log', x0=x, x1=x + rad * 2, r=rad, mat=WOOD)) + 2.0 + r() * 2.5
             return x
         if typ == 'ledge':
             L = 3 + r() * 6
-            return push(dict(t='ledge', x0=x0, x1=x0 + L, h=(0.2 + 0.32 * r()) * (0.7 + 0.5 * sc), mat=ROCK))
-        if typ == 'kicker':
-            L = 6 + r() * 4
-            return push(dict(t='kicker', x0=x0, x1=x0 + L, h=(0.9 + 1.5 * r()) * (0.6 + 0.6 * sc), mat=WOOD))
-        if typ == 'mud':
-            L = 6 + r() * 7
-            return push(dict(t='mud', x0=x0, x1=x0 + L, mat=MUD))
+            return push(dict(t='ledge', x0=x0, x1=x0 + L, h=(0.25 + 0.4 * r()) * (0.7 + 0.5 * sc), mat=ROCK))
+        if typ == 'drift':           # heap of deep soft stuff (snow in the cold biomes, mud otherwise)
+            w = 8 + r() * 10
+            fd = zp['soft'] * (0.6 if snowy else 0.55) + 0.9 + 1.0 * d
+            return push(dict(t='mound', x0=x0, x1=x0 + w, h=(0.5 + 0.8 * r()) * (0.7 + 0.5 * sc),
+                             mat=SNOW if snowy else MUD, fd=fd, whole=True))
+        if typ == 'rut':             # deep mud hole
+            w = 3.5 + r() * 3.5
+            return push(dict(t='hole', x0=x0, x1=x0 + w, h=(0.25 + 0.35 * r()) * (0.7 + sc * 0.6), mat=MUD, fd=1.1 + 0.8 * d, whole=True))
+        if typ == 'mudstretch':
+            L = 9 + r() * 10
+            return push(dict(t='hole', x0=x0, x1=x0 + L, h=0.15, mat=MUD, fd=0.9 + 0.7 * d, whole=True))
+        if typ == 'ice':
+            L = 7 + r() * 8
+            return push(dict(t='flat', x0=x0, x1=x0 + L, mat=ICE, whole=True))
         return x0 + 1
 
     # ---- continuous height (used to fill chunks)
@@ -316,36 +347,44 @@ class Terrain:
         for f in self.zone_features(z):
             if 'mat' not in f or x < f['x0'] or x > f['x1']:
                 continue
-            t = f['t']
-            fh = FEATURE[t](f, x)
-            if t in ('rock', 'log'):
-                if fh > 0.004:
+            if f['t'] in ('rock', 'log'):
+                if FEATURE[f['t']](f, x) > 0.004:
                     m = f['mat']
-            elif t == 'pothole':
-                if fh < -0.06:
-                    m = f['mat']
-            elif t == 'mud':
-                if f['x0'] + 0.4 < x < f['x1'] - 0.4:
+            elif f.get('whole'):
+                if f['x0'] + 0.3 < x < f['x1'] - 0.3 or f['t'] == 'flat':
                     m = f['mat']
             else:
-                m = f['mat']  # ledge, kicker: whole footprint
+                m = f['mat']  # ledge: whole footprint
         return m
+
+    def raw_floor(self, x, m, h0):
+        z = math.floor(x / ZL)
+        S = MATERIALS[m]['S']
+        fl = h0 - (S * self.zone_param(z)['soft'] if S > 0 else 0.0)
+        if S > 0:
+            for f in self.zone_features(z):
+                if 'fd' in f and f['x0'] <= x <= f['x1']:
+                    fl = self.base(x) - f['fd']
+        return min(fl, h0)
 
     def base_height(self, x):
         return self.base(x)
 
-    # ---- chunked samples
+    # ---- chunked samples:  (h, mat, floor, density, h0)
     def chunk(self, ci):
         c = self.chunks.get(ci)
         if c is not None:
             return c
-        hs = []
-        ms = []
+        hs, ms, fls, h0s = [], [], [], []
         for i in range(SC + 1):
             x = (ci * SC + i) * DX
-            hs.append(self.raw_height(x))
-            ms.append(self.raw_mat(x))
-        c = (hs, ms)
+            h0 = self.raw_height(x)
+            m = self.raw_mat(x)
+            hs.append(h0)
+            h0s.append(h0)
+            ms.append(m)
+            fls.append(self.raw_floor(x, m, h0))
+        c = (hs, ms, fls, [0.0] * (SC + 1), h0s)
         self.chunks[ci] = c
         return c
 
@@ -361,6 +400,18 @@ class Terrain:
             self._ch = self.chunk(ci)[0]
             self._ci = ci
         return self._ch[i - ci * SC]
+
+    def floor_at(self, i):
+        ci = i // SC
+        return self.chunk(ci)[2][i - ci * SC]
+
+    def dens_at(self, i):
+        ci = i // SC
+        return self.chunk(ci)[3][i - ci * SC]
+
+    def h0_at(self, i):
+        ci = i // SC
+        return self.chunk(ci)[4][i - ci * SC]
 
     def mat_idx(self, i):
         ci = i // SC
@@ -381,19 +432,107 @@ class Terrain:
         return self.mat_idx(round(x / DX))
 
     def surface(self, x):
-        """Surface properties at x (shared dict, don't keep a reference)."""
-        m = self.mat_at(x)
+        """Soil/material properties under x (shared dict, don't keep a reference)."""
+        i = round(x / DX)
+        ci = i // SC
+        c = self.chunk(ci)
+        j = i - ci * SC
+        m = c[1][j]
         M = MATERIALS[m]
         o = self._surf
         o['mat'] = m
-        o['mu'] = M['mu'] * (grip_at(x) if M['bgrip'] else 1.0)
-        o['loose'] = M['loose']
+        o['mu'] = M['mu']
+        o['ks'] = M['ks']
+        o['pb'] = M['pb']
         o['crr'] = M['crr']
         o['drag'] = M['drag']
+        o['dig'] = M['dig']
+        o['loose'] = M['loose']
+        th = c[0][j] - c[2][j]
+        o['soft'] = 0.0 if M['S'] <= 0 else clamp(th / 0.12, 0.0, 1.0)
+        o['dens'] = c[3][j]
+        o['h0'] = c[4][j]
+        o['thick'] = th
         return o
 
+    # ---- soil deformation under a wheel
+    def disturb(self, cx, cy, R, px, ratio, spin, back, dt):
+        """Wheel centre (cx,cy), radius R, contact x `px`.
+        ratio: wheel load / bearing capacity (>1 => soil yields), spin: wheel slip speed beyond
+        the dig threshold (m/s), back: +1/-1 direction soil is thrown (along +x)."""
+        ky = 0.0
+        if ratio > 1.0:
+            ky = clamp(self.yield_rate * (ratio - 1.0) * dt, 0.0, 0.35)
+        i0 = math.floor((cx - R) / DX)
+        i1 = math.floor((cx + R) / DX) + 1
+        sqrt = math.sqrt
+        removed = 0.0
+        comp = self.compact_rate * dt
+        for i in range(i0, i1 + 1):
+            dx = i * DX - cx
+            if dx <= -R or dx >= R:
+                continue
+            arc = cy - sqrt(R * R - dx * dx)
+            ci = i // SC
+            c = self.chunk(ci)
+            j = i - ci * SC
+            hi = c[0][j]
+            if hi <= arc:
+                continue
+            fli = c[2][j]
+            if hi <= fli + 1e-4:
+                continue
+            M = MATERIALS[c[1][j]]
+            new = hi - (hi - arc) * ky
+            if spin > 0.0:
+                new -= spin * M['dig'] * dt
+            if new < fli:
+                new = fli
+            removed += hi - new
+            c[0][j] = new
+            d = c[3][j]
+            c[3][j] = d + comp * (1.0 - d)
+        if removed > 0.0 or ky > 0.0:
+            self._relax(i0 - 4, i1 + 4)
+        if removed > 0.0 and spin > 0.0:
+            # throw part of it behind the wheel as a berm
+            ic = round(px / DX) + back * (int(0.5 * R / DX) + 2)
+            per = removed * 0.55 / 7.0
+            for k in range(7):
+                i = ic + back * k
+                ci = i // SC
+                c = self.chunk(ci)
+                j = i - ci * SC
+                top = c[4][j] + 0.25
+                v = c[0][j] + per
+                c[0][j] = v if v < top else top
+
+    def _relax(self, i0, i1):
+        """Loose soil slumps to its angle of repose (steep trench walls collapse inwards)."""
+        slope = 0.55 * DX          # max height step per sample
+        for i in range(i0, i1):
+            ci = i // SC
+            c = self.chunk(ci)
+            j = i - ci * SC
+            ci2 = (i + 1) // SC
+            c2 = c if ci2 == ci else self.chunk(ci2)
+            j2 = (i + 1) - ci2 * SC
+            a, b = c[0][j], c2[0][j2]
+            d = a - b
+            if d > slope:               # a higher: move soil from a to b (only soft soil above the pan)
+                mv = min((d - slope) * 0.5, a - c[2][j])
+                if mv > 0:
+                    c[0][j] = a - mv
+                    c2[0][j2] = b + mv
+            elif d < -slope:
+                mv = min((-d - slope) * 0.5, b - c2[2][j2])
+                if mv > 0:
+                    c2[0][j2] = b - mv
+                    c[0][j] = a + mv
+
+    # ---- circle (wheel) vs polyline
     def contact_circle(self, cx, cy, R, out):
-        """Circle (wheel) vs polyline. Fills out=[pen, nx, ny, px, py]; True on contact."""
+        """Fills out=[pen, nx, ny, px, py]; True on contact."""
         h_at = self.h_at
         i0 = math.floor((cx - R) / DX)
         i1 = math.floor((cx + R) / DX)

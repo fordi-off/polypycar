@@ -1,6 +1,9 @@
-"""Low-poly terrain rendering. Each 24 m chunk is rasterised once into a pygame Surface at
-the current screen scale (faceted dirt layers, jagged surface band, trees/cacti/spires,
-grass tufts) and then simply blitted every frame."""
+"""Low-poly terrain rendering.
+
+Static part: each 24 m chunk is rasterised once into a pygame Surface at the current screen
+scale (faceted sub-soil below the hard pan, hard surfaces like rock/logs/ice, trees, spires).
+Dynamic part: the soft soil layer (snow / mud / dirt between the hard pan and the live surface)
+is drawn every frame so ruts, packed tracks, thrown soil and exposed ground are always current."""
 import math
 import time
 import pygame
@@ -8,23 +11,37 @@ from .util import clamp, hash_i, hash2, mixc, shade, rgb
 from . import terrain as T
 
 LIGHT = (0.45, 0.89)
+ANCHOR_Y = 0.58   # must match game.ANCHOR
 DEPTHS = (0.15, 0.9, 2.1, 3.9, 6.2, 9.5)
 DECOR_TOP = 8.0
 DEEP_BELOW = 9.0
 
 
-def tint(pal, mat):
+def hard_tint(pal, mat):
     if mat == T.ROCK:
         return pal['rock']
     if mat == T.WOOD:
         return (124, 86, 52)
+    if mat == T.ICE:
+        return (172, 214, 236)
+    return pal['dirt']
+
+
+def soil_colors(pal, mat):
+    """(fresh, compacted, bare-ground) colours of a soft surface."""
+    dirt = pal['dirt']
+    if mat == T.SNOW:
+        return pal['snow'], mixc(pal['snow'], (178, 196, 222), 0.55), dirt
     if mat == T.MUD:
-        return (74, 51, 38)
-    if mat == T.ROAD:
-        return mixc(pal['dirt'], (222, 190, 142), 0.5)
+        m = mixc(dirt, (58, 42, 32), 0.8)
+        return m, shade(m, 0.72), m
+    if mat == T.PACKED:
+        c = mixc(pal['snow'], (170, 182, 200), 0.38)
+        return c, shade(c, 0.82), dirt
     if mat == T.GRAVEL:
-        return mixc(pal['rock'], pal['dirt'], 0.35)
-    return pal['top']
+        c = mixc(pal['rock'], dirt, 0.35)
+        return c, shade(c, 0.85), dirt
+    return pal['top'], shade(pal['top'], 0.78), dirt          # dirt / grass
 
 
 class ChunkRenderer:
@@ -33,16 +50,20 @@ class ChunkRenderer:
         self.ppm = ppm
         self.cache = {}
         self.pending = {}
+        self.soil = {}
 
     def set_scale(self, ppm):
         if abs(ppm - self.ppm) > 1e-6:
             self.ppm = ppm
             self.cache.clear()
             self.pending.clear()
+            self.soil.clear()
 
     def prune(self, ci_center, keep=3):
         for k in [k for k in self.cache if abs(k - ci_center) > keep]:
             del self.cache[k]
+        for k in [k for k in self.soil if abs(k - ci_center) > keep]:
+            del self.soil[k]
 
     def get(self, ci):
         """Chunk surface, built synchronously if it isn't ready."""
@@ -80,9 +101,10 @@ class ChunkRenderer:
         pad = 0.8
         X0, X1 = x0 - pad, x1 + pad
         i0, i1 = math.floor(X0 / T.DX), math.ceil(X1 / T.DX)
-        hs = [t.h_at(i) for i in range(i0, i1 + 1)]
-        top = max(hs) + DECOR_TOP
-        bottom = min(hs) - DEEP_BELOW
+        h0s = [t.h0_at(i) for i in range(i0, i1 + 1)]
+        fls = [t.floor_at(i) for i in range(i0, i1 + 1)]
+        top = max(h0s) + DECOR_TOP
+        bottom = min(fls) - DEEP_BELOW
         W = int((X1 - X0) * ppm) + 2
         H = int((top - bottom) * ppm) + 2
         surf = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -98,7 +120,7 @@ class ChunkRenderer:
         yield
 
         # deep base
-        pts = [P(T.DX * i, t.h_at(i)) for i in range(i0, i1 + 1, 2)]
+        pts = [P(T.DX * i, t.floor_at(i)) for i in range(i0, i1 + 1, 2)]
         pts += [P(X1, bottom), P(X0, bottom)]
         poly(surf, rgb(pal_c['deep']), pts)
 
@@ -114,7 +136,7 @@ class ChunkRenderer:
                 if k > 0:
                     x += (hash2(gi, k, 3) - 0.5) * 0.5
                 c = round(x / T.DX)
-                sy = min(t.h_at(j) for j in range(c - 4, c + 5))
+                sy = min(t.floor_at(j) for j in range(c - 4, c + 5))
                 y = sy - d
                 if k > 0:
                     y += (hash2(gi, k, 4) - 0.5) * 0.4 * (1 + k * 0.3)
@@ -137,21 +159,25 @@ class ChunkRenderer:
                     poly(surf, rgb(base, br), tri)
 
         yield
-        # surface band (precise to the sample grid, 0.2 m columns)
+        # surface band, 0.2 m columns: hard surfaces (rock / logs / ice) are baked from their top;
+        # under soft soil only the bare ground strip below the hard pan is baked
         ci0 = i0 + (i0 & 1)
         for i in range(ci0, i1 - 1, 2):
             if i % 40 == 0:
                 yield
             xa, xb = i * T.DX, (i + 2) * T.DX
-            ya, yb = t.h_at(i), t.h_at(i + 2)
+            h0a, h0b = t.h0_at(i), t.h0_at(i + 2)
+            fa, fb = t.floor_at(i), t.floor_at(i + 2)
             m = t.mat_idx(i + 1)
             pal = T.palette_at(xa)
-            col = tint(pal, m)
+            soft = fa < h0a - 1e-6 or fb < h0b - 1e-6
+            ya, yb = (fa, fb) if soft else (h0a, h0b)
+            col = pal['dirt'] if soft else hard_tint(pal, m)
             sl = (yb - ya) / (xb - xa)
             il = 1 / math.sqrt(1 + sl * sl)
             lit = 0.78 + 0.36 * (-sl * il * LIGHT[0] + il * LIGHT[1])
             jit = 0.94 + 0.12 * hash_i(math.floor(xa / 0.5), 11)
-            if m in (T.ROCK, T.WOOD):
+            if not soft and m in (T.ROCK, T.WOOD):
                 da = max(0.3, ya - t.base_height(xa) + 0.05)
                 db = max(0.3, yb - t.base_height(xb) + 0.05)
             else:
@@ -164,23 +190,74 @@ class ChunkRenderer:
                 br *= 0.92 + 0.16 * hash_i(i, 5)
             poly(surf, rgb(col, br), (A, B, Cc))
             poly(surf, rgb(col, br * (0.93 if hash_i(i, 6) > 0.5 else 1.06)), (A, Cc, D))
+        self.cache[ci] = (surf.convert_alpha(), X0, top, bottom)
 
-        yield
-        # grass tufts
-        if pal_c['name'] != 'canyon':
-            for n in range(int(x0 / 0.35), int(x1 / 0.35)):
-                if hash_i(n, 21) > 0.5:
-                    continue
-                x = n * 0.35 + hash_i(n, 22) * 0.3
-                i = round(x / T.DX)
-                if t.mat_idx(i) != T.GROUND:
-                    continue
-                y = t.h(x)
-                h = 0.1 + 0.25 * hash_i(n, 23)
-                lean = (hash_i(n, 24) - 0.5) * 0.18
-                col = shade(T.palette_at(x)['tuft'], 0.85 + 0.3 * hash_i(n, 25))
-                poly(surf, rgb(col), (P(x - 0.035, y - 0.03), P(x + 0.035, y - 0.03), P(x + lean, y + h)))
-        self.cache[ci] = (surf, X0, top, bottom)
+    # ------------------------------------------------------------ live soil layer
+    def soil_cols(self, ci):
+        c = self.soil.get(ci)
+        if c is None:
+            t = self.t
+            c = []
+            pal = None
+            for j in range(0, T.SC, 2):
+                if j % 16 == 0:
+                    pal = T.palette_at((ci * T.SC + j) * T.DX)
+                c.append(soil_colors(pal, t.mat_idx(ci * T.SC + j + 1)))
+            self.soil[ci] = c
+        return c
+
+    def draw_soil(self, scr, view):
+        """Soft soil between the hard pan and the live surface, redrawn every frame."""
+        t = self.t
+        W, H, s = view.W, view.H, view.s
+        ia = (math.floor((view.cx - W / 2 / s) / T.DX) - 2) & ~1
+        ib = math.ceil((view.cx + W / 2 / s) / T.DX) + 2
+        n = ib - ia + 3
+        hp, fp, dp = t.h_at, t.floor_at, t.dens_at
+        hs = [hp(i) for i in range(ia, ia + n)]
+        fs = [fp(i) for i in range(ia, ia + n)]
+        ds = [dp(i) for i in range(ia, ia + n)]
+        poly = pygame.draw.polygon
+        cx, cy = view.cx, view.cy
+        ox, oy = W * 0.5, view.H * ANCHOR_Y
+        dxs = T.DX * 2 * s
+        sc = s
+        cols = None
+        ci_prev = None
+        L0, L1 = LIGHT
+        for k in range(0, n - 2, 2):
+            ya, yb, fa, fb = hs[k], hs[k + 2], fs[k], fs[k + 2]
+            th = ya - fa
+            if th < 0.004 and yb - fb < 0.004:
+                continue
+            i = ia + k
+            ci = i // T.SC
+            if ci != ci_prev:
+                cols = self.soil_cols(ci)
+                ci_prev = ci
+            fresh, packed, bare = cols[(i - ci * T.SC) >> 1]
+            d = ds[k] * 0.9
+            d = 1.0 if d > 1.0 else d
+            r = fresh[0] + (packed[0] - fresh[0]) * d
+            g = fresh[1] + (packed[1] - fresh[1]) * d
+            b = fresh[2] + (packed[2] - fresh[2]) * d
+            if th < 0.14:                      # thin soil: bare ground shows through
+                f = th / 0.14 if th > 0 else 0.0
+                r = bare[0] + (r - bare[0]) * f
+                g = bare[1] + (g - bare[1]) * f
+                b = bare[2] + (b - bare[2]) * f
+            sl = (yb - ya) / (T.DX * 2)
+            il = 1.0 / math.sqrt(1.0 + sl * sl)
+            lit = 0.8 + 0.34 * (-sl * il * L0 + il * L1)
+            xa = (i * T.DX - cx) * sc + ox
+            xb = xa + dxs
+            sya, syb = oy - (ya - cy) * sc, oy - (yb - cy) * sc
+            sfa, sfb = oy - (fa - cy) * sc + 1, oy - (fb - cy) * sc + 1
+            c1 = (min(255, int(r * lit)), min(255, int(g * lit)), min(255, int(b * lit)))
+            lt = lit * 0.93
+            c2 = (min(255, int(r * lt)), min(255, int(g * lt)), min(255, int(b * lt)))
+            poly(scr, c1, ((xa, sya), (xb, syb), (xb, sfb)))
+            poly(scr, c2, ((xa, sya), (xb, sfb), (xa, sfa)))
 
     # ------------------------------------------------------------------ decor
     def _decor(self, surf, P, ppm, ci, x0, x1):
@@ -194,14 +271,14 @@ class ChunkRenderer:
             if hash_i(n, 30) > pal['density']:
                 continue
             i = round(x / T.DX)
-            if any(t.mat_idx(i + d) != T.GROUND for d in (-6, 0, 6)):
+            if any(t.mat_idx(i + d) not in (T.DIRT, T.SNOW, T.MUD, T.GRAVEL) for d in (-6, 0, 6)):
                 continue
             if abs(t.slope(x)) > 0.7:
                 continue
             kinds = pal['decor']
             kind = kinds[int(hash_i(n, 32) * len(kinds))]
             s = 0.75 + 0.9 * hash_i(n, 33)
-            y = t.h(x) - 0.15
+            y = t.h0_at(i) - 0.2
             draw_decor(surf, P, kind, x, y, s, pal, n)
 
 
@@ -212,7 +289,7 @@ def _pl(surf, P, col, pts):
 def draw_decor(surf, P, kind, x, y, s, pal, n):
     tree, trunk, rock = pal['tree'], pal['trunk'], pal['rock']
     if kind == 'pine':
-        snow = pal['name'] == 'tundra'
+        snow = pal['name'] in ('taiga', 'whiteout')
         _pl(surf, P, shade(trunk, 0.9), [(x - 0.09 * s, y), (x + 0.09 * s, y), (x + 0.07 * s, y + 0.9 * s), (x - 0.07 * s, y + 0.9 * s)])
         for j in range(4):
             by = y + (0.5 + j * 0.85) * s
@@ -222,7 +299,7 @@ def draw_decor(surf, P, kind, x, y, s, pal, n):
             _pl(surf, P, shade(tree, 0.78), [(ax, by + hh), (x - w, by), (x, by)])
             _pl(surf, P, shade(tree, 1.12), [(ax, by + hh), (x, by), (x + w, by)])
             if snow:
-                _pl(surf, P, (240, 247, 255), [(ax, by + hh), (ax - w * 0.42, by + hh * 0.58), (ax + w * 0.42, by + hh * 0.58)])
+                _pl(surf, P, tuple(pal['snow']), [(ax, by + hh), (ax - w * 0.42, by + hh * 0.58), (ax + w * 0.42, by + hh * 0.58)])
     elif kind == 'broadleaf':
         _pl(surf, P, shade(trunk, 0.9), [(x - 0.11 * s, y), (x + 0.11 * s, y), (x + 0.07 * s, y + 1.3 * s), (x - 0.07 * s, y + 1.3 * s)])
         cy, r = y + 1.9 * s, 1.0 * s
@@ -234,6 +311,14 @@ def draw_decor(surf, P, kind, x, y, s, pal, n):
                 am = (a0 + a1) / 2
                 lit = 0.85 + 0.3 * math.cos(am - 1.0)
                 _pl(surf, P, shade(tree, lit), [(cx, cyy), (cx + math.cos(a0) * R, cyy + math.sin(a0) * R), (cx + math.cos(a1) * R, cyy + math.sin(a1) * R)])
+    elif kind == 'deadtree':
+        tr = shade(trunk, 0.8)
+        h = (2.6 + 1.4 * hash_i(n, 44)) * s
+        _pl(surf, P, tr, [(x - 0.12 * s, y), (x + 0.12 * s, y), (x + 0.05 * s, y + h), (x - 0.05 * s, y + h)])
+        for k, (hy, dx, up) in enumerate(((0.45, -1, 0.9), (0.62, 1, 1.0), (0.8, -1, 0.7))):
+            by = y + hy * h
+            ex, ey = x + dx * (0.6 + 0.3 * hash_i(n * 5 + k, 45)) * s, by + up * 0.7 * s
+            _pl(surf, P, shade(trunk, 0.95), [(x, by), (x, by + 0.09 * s), (ex, ey + 0.05 * s), (ex, ey)])
     elif kind == 'bush':
         for ox, rr in ((-0.35, 0.45), (0.3, 0.5), (0.0, 0.62)):
             cx, cyy, R = x + ox * s, y + 0.3 * s, rr * s

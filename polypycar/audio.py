@@ -4,7 +4,7 @@ import numpy as np
 import pygame
 
 SR = 22050
-RPMS = [800 + 300 * i for i in range(22)]
+RPMS = [500 + 150 * i for i in range(18)]   # 500 .. 3050 rpm
 
 
 def _make(rpm):
@@ -13,10 +13,10 @@ def _make(rpm):
     n = int(round(cycles / f * SR))
     t = np.arange(n) / n * cycles * math.tau
     w = np.zeros(n)
-    for h, a in enumerate((1.0, 0.62, 0.5, 0.34, 0.26, 0.16, 0.1, 0.07), start=1):
-        w += a * np.sin(h * t + 0.7 * h)
-    w += 0.45 * np.sin(0.5 * t) + 0.25 * np.sin(1.5 * t)
-    w = np.tanh(w * 0.9)
+    for h, a in enumerate((0.8, 1.0, 0.8, 0.55, 0.4, 0.28, 0.18, 0.12, 0.08), start=1):
+        w += a * np.sin(h * t + 0.9 * h * h * 0.1)
+    w += 0.7 * np.sin(0.5 * t) + 0.35 * np.sin(1.5 * t)           # lumpy diesel firing
+    w = np.tanh(w * 1.1)
     return (w * 0.55 * 32767).astype(np.int16)
 
 
@@ -47,10 +47,10 @@ class Audio:
         if not self.ok or self.muted:
             return
         rpm = min(max(car.rpm, RPMS[0]), RPMS[-1] - 1)
-        pos = (rpm - RPMS[0]) / 300.0
+        pos = (rpm - RPMS[0]) / 150.0
         i = int(pos)
         frac = pos - i
-        gain = 0.18 + 0.5 * car.throttle
+        gain = 0.2 + 0.45 * car.throttle
         if car.limiter:
             gain *= 0.6 + 0.4 * math.sin(pygame.time.get_ticks() * 0.09)
         for layer, vol in ((i, (1 - frac) * gain), (i + 1, frac * gain)):

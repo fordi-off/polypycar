@@ -2,7 +2,7 @@
 import math
 import random
 import pygame
-from .util import mixc, rgb
+from .util import mixc, shade, rgb
 
 MAX = 420
 
@@ -24,7 +24,10 @@ class Particles:
             if q[4] <= 0:
                 continue
             k = q[8]
-            if k == 0:
+            if k == 3:
+                q[2] *= 1 - 0.6 * dt
+                q[3] = q[3] * (1 - 0.8 * dt) + 0.15 * dt
+            elif k == 0:
                 q[2] *= 1 - 1.8 * dt
                 q[3] = q[3] * (1 - 1.8 * dt) + 0.6 * dt
             else:
@@ -49,40 +52,53 @@ class Particles:
             if kind == 2:
                 pygame.draw.line(ov, (255, 220, 120, 255), (x, y), (x - q[2] * 0.03 * s, y + q[3] * 0.03 * s), 2)
                 continue
-            r = q[6] * s * (1.4 - 0.4 * f if kind == 0 else 1.0)
-            a = int(200 * f * (0.7 if kind == 0 else 1.0))
+            r = q[6] * s * ((1.4 - 0.4 * f) if kind == 0 else (2.4 - 1.4 * f) if kind == 3 else 1.0)
+            a = int(200 * f * (0.7 if kind == 0 else 0.55 if kind == 3 else 1.0))
             col = (int(q[7][0]), int(q[7][1]), int(q[7][2]), a)
             ang = q[0] * 3.0
             pts = [(x + math.cos(ang + i * math.tau / 5) * r, y + math.sin(ang + i * math.tau / 5) * r) for i in range(5)]
             pygame.draw.polygon(ov, col, pts)
         surf.blit(ov, (0, 0))
 
-    # --- spawning helpers driven by the car state
-    def wheel_fx(self, car, dt, pal_top, terrain):
+    # --- spawning helpers driven by the truck state
+    def wheel_fx(self, car, dt, pal, exhaust):
+        from .terrain_render import soil_colors
+        from . import terrain as T
         rnd = self.rnd
         for w in car.wheels:
-            if not w.touching or w.Fn < 200:
+            if not w.touching or w.Fn < 500:
                 continue
             slip = abs(w.slip)
             spd = abs(w.vt)
-            loose = w.loose
-            inten = (max(0.0, slip - 1.2) * 0.25 + spd * 0.025) * loose
-            if w.mat == 1:
-                inten *= 0.25
-            n = inten * 70 * dt
+            m = w.mat
+            if m in (T.ROCK, T.WOOD, T.ICE):
+                inten = max(0.0, slip - 1.5) * 0.1
+                col = (190, 196, 206) if m == T.ICE else (150, 150, 158)
+            else:
+                inten = (max(0.0, slip - 0.6) * 0.7 + spd * 0.05) * (0.25 + w.soft)
+                col = soil_colors(pal, m)[0]
+            n = inten * 55 * dt
             cnt = int(n) + (1 if rnd.random() < n - int(n) else 0)
-            for _ in range(min(cnt, 4)):
+            for _ in range(min(cnt, 5)):
                 px, py = w.con[3], w.con[4]
                 back = -1.0 if w.slip > 0 else 1.0
-                sp = min(slip, 14.0)
-                vx = w.tx * back * sp * 0.35 + car.vx * 0.25 + rnd.uniform(-0.8, 0.8)
-                vy = w.ty * back * sp * 0.35 + rnd.uniform(0.5, 2.8)
-                if w.mat == 3:
-                    col = (82, 58, 42)
-                    self.emit(px, py, vx, vy + 1.5, rnd.uniform(0.5, 0.9), rnd.uniform(0.05, 0.1), col, 1)
+                sp = min(slip, 12.0)
+                vx = w.tx * back * sp * 0.45 + car.vx * 0.3 + rnd.uniform(-0.8, 0.8)
+                vy = w.ty * back * sp * 0.45 + rnd.uniform(0.5, 3.0)
+                if m in (T.MUD, T.SNOW) and slip > 2.5 and rnd.random() < 0.45:
+                    c = shade(col, 0.85) if m == T.MUD else col
+                    self.emit(px, py, vx * 1.3, vy + 2.0, rnd.uniform(0.5, 0.9), rnd.uniform(0.06, 0.13), c, 1)
                 else:
-                    col = mixc(pal_top, (196, 180, 150), 0.45) if w.mat != 1 else (150, 150, 158)
-                    self.emit(px, py, vx, vy, rnd.uniform(0.6, 1.3), rnd.uniform(0.12, 0.26), col, 0)
+                    self.emit(px, py, vx, vy, rnd.uniform(0.7, 1.5), rnd.uniform(0.15, 0.32), col, 0)
+        # diesel smoke
+        thr = car.throttle
+        if thr > 0.12 and exhaust:
+            n = (0.4 + 2.2 * thr * thr) * 24 * dt
+            cnt = int(n) + (1 if rnd.random() < n - int(n) else 0)
+            for _ in range(cnt):
+                g = 70 + int(30 * (1 - thr))
+                self.emit(exhaust[0], exhaust[1], car.vx * 0.5 + rnd.uniform(-0.3, 0.3), rnd.uniform(1.0, 2.2),
+                          rnd.uniform(1.2, 2.2), rnd.uniform(0.12, 0.2), (g, g, g + 4), 3)
         if car.hit_f > 5000:
             hx, hy = car.hit
             n = min(6, int(car.hit_f / 9000) + 1)
