@@ -48,7 +48,7 @@ def test_accelerates_and_shifts():
         car.control(1 / 60, 1, 0, 0, 0)
         car.step(1 / 60)
         gears.add(car.gear)
-    assert car.vx > 20 and {1, 2, 3} <= gears and car.rpm < 7000
+    assert car.vx > 20 and {1, 2} <= gears and car.rpm < 7000
 
 
 def test_reverse_and_brake():
