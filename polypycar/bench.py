@@ -55,3 +55,12 @@ def run(app, frames=300):
     for n, a in zip(names, acc):
         print('%-15s %6.2f ms' % (n, a / frames * 1000))
     print('%-15s %6.2f ms   (~%d fps uncapped)' % ('total', tot, 1000 / tot))
+    # the real loop: events, scene update (incl. audio), draw, HUD, present - no frame limiter
+    app.settings['fps_target'] = 0
+    app.settings['show_fps'] = False
+    t0 = pc()
+    n = 240
+    for _ in range(n):
+        app.step(1 / 60)
+        pygame.display.flip()
+    print('%-15s %6.2f ms   (~%d fps) <- what the game really runs at, uncapped' % ('full game step', (pc() - t0) / n * 1000, n / (pc() - t0)))

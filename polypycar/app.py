@@ -283,14 +283,30 @@ class App:
             ui.text(self.screen, t[0], (W / 2, y), int(24 * u), ui.TEXT, 'c')
             y -= 30 * u
 
+    def _limit(self, frame_start):
+        """Frame limiter: sleep most of the remaining time, spin the last ~1.5 ms (Clock.tick is too coarse on Windows)."""
+        target = self.settings['fps_target']
+        if target <= 0:
+            return
+        end = frame_start + 1.0 / target
+        while True:
+            left = end - time.perf_counter()
+            if left <= 0:
+                return
+            if left > 0.002:
+                time.sleep(left - 0.0015)
+
     def run(self):
         self.goto(None)
+        last = frame_start = time.perf_counter()
         while self.running:
-            target = self.settings['fps_target']
-            ms = self.clock.tick(target if target > 0 else 0)
-            dt = min(ms / 1000.0, 1 / 20.0)
-            self.fps = self.clock.get_fps() or self.fps
+            now = time.perf_counter()
+            dt = min(now - last, 1 / 20.0)
+            last = now
+            self.fps += (1.0 / max(dt, 1e-4) - self.fps) * 0.08
             self.step(dt)
             pygame.display.flip()
+            self._limit(frame_start)
+            frame_start = time.perf_counter()
         self.settings.save()
         pygame.quit()
