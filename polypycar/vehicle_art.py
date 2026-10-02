@@ -209,4 +209,79 @@ def hauler_post(c):
         poly((26, 26, 30), [(cx - 1.12, -0.45), (cx - 1.04, -0.45), (cx - 1.04, -1.1), (cx - 1.12, -1.1)])
 
 
-ART = {'pickup': (pickup_pre, pickup_post), 'logger': (logger_pre, logger_post), 'hauler': (hauler_pre, hauler_post)}
+
+# ====================================================================== rally coupe (classic 911-style profile)
+def _catmull(pts, n=6):
+    """Smooth open curve through the control points."""
+    P = [pts[0]] + list(pts) + [pts[-1]]
+    out = []
+    for i in range(1, len(P) - 2):
+        p0, p1, p2, p3 = P[i - 1], P[i], P[i + 1], P[i + 2]
+        for k in range(n):
+            t = k / n
+            t2, t3 = t * t, t * t * t
+            out.append(tuple(0.5 * (2 * p1[j] + (-p0[j] + p2[j]) * t + (2 * p0[j] - 5 * p1[j] + 4 * p2[j] - p3[j]) * t2
+                                    + (-p0[j] + 3 * p1[j] - 3 * p2[j] + p3[j]) * t3) for j in (0, 1)))
+    out.append(tuple(pts[-1]))
+    return out
+
+
+# nose -> roof -> tail: round fenders hugging the tyres, a gently arched cabin and a long fastback
+_TOP = _catmull([(2.14, -0.46), (2.22, -0.30), (2.20, -0.14), (2.08, -0.02), (1.80, 0.06), (1.50, 0.17), (1.25, 0.25),
+                 (1.02, 0.22), (0.80, 0.20), (0.50, 0.38), (0.18, 0.52), (-0.20, 0.58), (-0.58, 0.55), (-0.95, 0.46),
+                 (-1.30, 0.33), (-1.70, 0.22), (-2.02, 0.14), (-2.17, 0.07), (-2.22, -0.06), (-2.20, -0.30)])
+_ARCH_R, _ARCH_CY, _BOT = 0.43, -0.33, -0.50
+_BELT = 0.20                                     # bottom of the side glass
+
+
+def _round_arch(cx, r=_ARCH_R):
+    pts = [(cx - r, _BOT), (cx - r, _ARCH_CY)]
+    for k in range(1, 9):
+        a = math.pi - k * math.pi / 9
+        pts.append((cx + math.cos(a) * r, _ARCH_CY + math.sin(a) * r))
+    pts += [(cx + r, _ARCH_CY), (cx + r, _BOT)]
+    return pts
+
+
+def _rally_sil():
+    return [(-2.2, _BOT)] + _round_arch(-1.25) + _round_arch(1.25) + [(2.12, _BOT)] + _TOP
+
+
+def rally_pre(c):
+    for cx in (-1.25, 1.25):
+        c.poly((20, 20, 26), _round_arch(cx, _ARCH_R + 0.05))
+
+
+def _rally_driver(c, hx, hy):
+    """Helmeted driver seated inside the glass; everything stays above the belt line."""
+    poly = c.poly
+    hx, hy = hx + c.head[0], hy + c.head[1] * 0.6
+    poly((40, 44, 56), [(hx - 0.30, _BELT), (hx - 0.26, _BELT + 0.22), (hx - 0.12, _BELT + 0.3), (hx + 0.1, _BELT + 0.3), (hx + 0.2, _BELT)])   # seat
+    poly((214, 62, 54), [(hx - 0.2, _BELT), (hx - 0.16, _BELT + 0.1), (hx - 0.04, hy - 0.09), (hx + 0.1, hy - 0.09), (hx + 0.17, _BELT)])        # suit
+    poly((246, 246, 250), [(hx + math.cos(a * math.tau / 10) * 0.105, hy + math.sin(a * math.tau / 10) * 0.105) for a in range(10)])             # helmet
+    poly((40, 52, 70), [(hx + 0.02, hy + 0.045), (hx + 0.105, hy + 0.045), (hx + 0.1, hy - 0.035), (hx + 0.02, hy - 0.035)])                    # visor
+
+
+def rally_post(c):
+    poly, base = c.poly, c.base
+    poly(base, _rally_sil())
+    poly(base, [(-0.82, _BOT), (0.82, _BOT), (0.82, -0.34), (-0.82, -0.34)], 0.78)                # sill
+    top = [(x, y) for x, y in _TOP if -1.9 <= x <= 1.9]                                          # soft shoulder highlight
+    poly(base, [(x, y - 0.03) for x, y in top] + [(x, y - 0.11) for x, y in reversed(top)], 1.13)
+    for cx in (-1.25, 1.25):                                                                    # arch outlines
+        pygame.draw.lines(c.surf, rgb((22, 24, 30)), False, c.L(_round_arch(cx)[1:-1]), max(2, int(c.view.s * 0.045)))
+    g = [(x, y - 0.04) for x, y in _TOP if -1.15 <= x <= 0.72 and y - 0.04 > _BELT + 0.04]
+    poly((62, 88, 112), [(0.8, _BELT)] + g + [(-1.18, _BELT)])
+    poly((150, 190, 214), [(0.8, _BELT)] + g[:len(g) // 2 + 1] + [(0.05, _BELT)], 0.95)
+    _rally_driver(c, -0.12, 0.40)
+    # round lamp, tail lamp, ducktail, door roundel, front lip - nothing else
+    poly((26, 28, 34), [(1.94 + math.cos(a * math.tau / 12) * 0.115, -0.1 + math.sin(a * math.tau / 12) * 0.115) for a in range(12)])
+    poly((255, 247, 205), [(1.94 + math.cos(a * math.tau / 12) * 0.088, -0.1 + math.sin(a * math.tau / 12) * 0.088) for a in range(12)])
+    poly((236, 52, 56), [(-2.2, -0.08), (-2.15, -0.07), (-2.15, 0.01), (-2.2, 0.0)])
+    poly(base, [(-2.02, 0.14), (-2.17, 0.07), (-2.22, 0.1), (-2.05, 0.18)], 1.22)
+    poly((248, 248, 250), [(-0.02 + math.cos(a * math.tau / 12) * 0.12, -0.04 + math.sin(a * math.tau / 12) * 0.12) for a in range(12)])
+    poly((50, 52, 60), [(1.95, _BOT), (2.14, -0.48), (2.17, -0.42), (1.95, -0.44)])
+
+
+ART = {'pickup': (pickup_pre, pickup_post), 'logger': (logger_pre, logger_post), 'hauler': (hauler_pre, hauler_post),
+       'rally': (rally_pre, rally_post)}

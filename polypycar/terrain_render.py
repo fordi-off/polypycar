@@ -24,6 +24,8 @@ def hard_tint(pal, mat):
         return (124, 86, 52)
     if mat == T.ICE:
         return (172, 214, 236)
+    if mat == T.ASPHALT:
+        return (66, 68, 78)
     return pal['dirt']
 
 
@@ -41,6 +43,9 @@ def soil_colors(pal, mat):
     if mat == T.GRAVEL:
         c = mixc(pal['rock'], dirt, 0.35)
         return c, shade(c, 0.85), dirt
+    if mat == T.HARDPACK:
+        c = mixc(dirt, (234, 210, 164), 0.55)
+        return c, shade(c, 0.92), dirt
     return pal['top'], shade(pal['top'], 0.78), dirt          # dirt / grass
 
 
@@ -171,8 +176,11 @@ class ChunkRenderer:
             m = t.mat_idx(i + 1)
             pal = T.palette_at(xa)
             soft = fa < h0a - 1e-6 or fb < h0b - 1e-6
+            thin = soft and 0 < T.MATERIALS[m]['S'] < 0.1            # hardpack / gravel: a road surface, bake it
+            if thin:
+                soft = False
             ya, yb = (fa, fb) if soft else (h0a, h0b)
-            col = pal['dirt'] if soft else hard_tint(pal, m)
+            col = pal['dirt'] if soft else (soil_colors(pal, m)[0] if thin else hard_tint(pal, m))
             sl = (yb - ya) / (xb - xa)
             il = 1 / math.sqrt(1 + sl * sl)
             lit = 0.78 + 0.36 * (-sl * il * LIGHT[0] + il * LIGHT[1])
@@ -190,6 +198,8 @@ class ChunkRenderer:
                 br *= 0.92 + 0.16 * hash_i(i, 5)
             poly(surf, rgb(col, br), (A, B, Cc))
             poly(surf, rgb(col, br * (0.93 if hash_i(i, 6) > 0.5 else 1.06)), (A, Cc, D))
+            if m == T.ASPHALT and not soft and (i // 24) % 2 == 0:          # painted edge line, dashed
+                poly(surf, (222, 224, 230), (A, B, P(xb, yb - 0.07), P(xa, ya - 0.07)))
         self.cache[ci] = (surf.convert_alpha(), X0, top, bottom)
 
     # ------------------------------------------------------------ live soil layer

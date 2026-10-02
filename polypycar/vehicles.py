@@ -162,7 +162,35 @@ HAULER = VehicleSpec(
     paints=[(40, 120, 130), (214, 86, 40), (230, 200, 60), (180, 60, 60), (226, 228, 234), (70, 100, 70), (40, 44, 54)],
 )
 
-VEHICLES = [PICKUP, LOGGER, HAULER]
+
+RALLY = VehicleSpec(
+    id='rally4x4', name='Zephyr GT Rally', tagline='Built to go flat out on gravel and tarmac',
+    description='A 350 hp turbo rally coupe with a classic sports-car silhouette: light, low and fast, with a short-geared 6-speed and permanent AWD. '
+                'Unbeatable on firm ground in the Rally Stage - and hopelessly out of its depth in snow or mud. '
+                'Disconnect the front axle to slide it around as rear-wheel drive.',
+    kind='4x4 rally coupe',
+    engine=Engine('2.0 T', '2.0 L turbo petrol inline-4',
+                  [(0, 150), (1000, 230), (2000, 330), (3000, 450), (4000, 520), (5000, 530), (5500, 520),
+                   (6500, 480), (7200, 400), (7700, 250), (8200, 0)],
+                  idle=1000, redline=7600, inertia=0.16, torque_scale=0.8, brake0=30, brake1=0.012, cylinders=4),
+    gears=(3.4, 2.3, 1.7, 1.35, 1.1, 0.9), reverse=3.2, final=4.2,
+    drivetrain=dict(tree=('center', 0, 1), has_range=False, low_mult=1.0, disconnectable=[0], default={'center': 1}),
+    body_pts=[(2.12, -0.42), (2.2, -0.2), (2.05, 0.0), (1.25, 0.24), (0.5, 0.38), (0.18, 0.52), (-0.6, 0.55), (-1.3, 0.33),
+              (-2.05, 0.14), (-2.2, -0.08), (-2.2, -0.42), (-1.0, -0.5), (0.0, -0.5), (1.0, -0.5)],
+    art='rally', art_box=(6.2, 2.8, -0.1), exhaust=(-2.2, -0.35),
+    physics=dict(
+        mass=1350.0, inertia=2300.0, wheel_mass=32.0, wheel_r=0.33, wheel_i=1.1,
+        mount_x=(1.25, -1.25), mount_y=0.08, l0=0.56, lmin=0.14, lmax=0.56,
+        k=(50000.0, 52000.0), k_prog=(150000.0, 150000.0), c_bump=3700.0, c_reb=6400.0, v_blow=1.2, blow=0.4,
+        k_stop=3.0e5, c_stop=9000.0, k_lat=4.0e6, c_lat=22000.0,
+        tire_k=250000.0, tire_c=1500.0, soil_c=6000.0, pen_max=0.12, k_rim=2.5e6, tire_w=0.7, patch_gain=0.3,
+        clutch_cap=800.0, brake_t=3300.0, drag=0.45, air_torque=6500.0, ground_torque=1800.0, ang_damp=230.0,
+        body_k=160000.0, body_c=6500.0, v_min=0.4),
+    tires='0.66 m rally tyres', diff_scale=0.18,
+    paints=[(36, 92, 206), (214, 52, 48), (244, 200, 40), (60, 160, 96), (236, 238, 244), (40, 44, 54), (232, 120, 36)],
+)
+
+VEHICLES = [RALLY, PICKUP, LOGGER, HAULER]
 BY_ID = {v.id: v for v in VEHICLES}
 
 

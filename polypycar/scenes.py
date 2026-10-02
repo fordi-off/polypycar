@@ -160,21 +160,31 @@ class SettingsScene(Scene):
 
         pct = '{:.0%}'
         if name == 'Video':
-            desk = app.desktop
-            res = [r for r in RESOLUTIONS if r[0] <= desk[0] and r[1] <= desk[1]]
-            if tuple(desk) not in res:
-                res.append(tuple(desk))
-            cur = tuple(st['resolution'])
-            if cur not in res:
-                res.append(cur)
-            res.sort()
+            def desk():
+                return tuple(app.desktop)
+
+            def res_options():
+                d = desk()
+                if st['display_mode'] == 'borderless':
+                    return [(d, '%d x %d  (desktop)' % d)]
+                res = [r for r in RESOLUTIONS if r[0] <= d[0] and r[1] <= d[1]]
+                for extra in (d, tuple(st['resolution'])):
+                    if extra not in res and extra[0] <= d[0] and extra[1] <= d[1]:
+                        res.append(extra)
+                res.sort()
+                return [(r, '%d x %d%s' % (r[0], r[1], '  (native)' if r == d else '')) for r in res]
+
+            def res_get():
+                return desk() if st['display_mode'] == 'borderless' else tuple(st['resolution'])
+
             return Page([
                 Header('Display'),
                 Choice('Display mode', [('windowed', 'Windowed'), ('borderless', 'Borderless fullscreen'), ('fullscreen', 'Exclusive fullscreen')],
                        getter('display_mode'), setter('display_mode', app.apply_display)),
-                Choice('Resolution', [(r, '%d x %d%s' % (r[0], r[1], '  (native)' if r == tuple(desk) else '')) for r in res],
-                       lambda: tuple(st['resolution']), lambda v: (st.__setitem__('resolution', list(v)), app.apply_display())),
-                Note('Borderless fullscreen always uses the desktop resolution; use render scale to go lighter.'),
+                Choice('Resolution', res_options, res_get, lambda v: (st.__setitem__('resolution', list(v)), app.apply_display()),
+                       disabled=lambda: st['display_mode'] == 'borderless'),
+                Note(lambda: 'Borderless fullscreen always uses your desktop resolution (%d x %d) - lower the render scale to go lighter.' % desk()
+                     if st['display_mode'] == 'borderless' else 'Windowed and exclusive fullscreen use this resolution.'),
                 Choice('Render scale', [(s_, '%d%%' % round(s_ * 100)) for s_ in (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)],
                        getter('render_scale'), setter('render_scale')),
                 Choice('FPS limit', [(f, 'Unlimited' if f == 0 else '%d fps' % f) for f in FPS_OPTIONS], getter('fps_target'), setter('fps_target')),
@@ -498,10 +508,12 @@ class GarageScene(Scene):
              (rx, y), int(20 * u), DIM, shadow=False, maxw=rw)
         y += 28 * u
         e = sp.engine
-        text(surf, 'ENGINE  -  %s' % e.config, (rx, y), int(24 * u), ACCENT, shadow=False, maxw=rw * 0.62)
-        text(surf, 'idle %d  /  redline %d rpm' % (e.idle, e.redline), (rx + rw, y + 3 * u), int(20 * u), DIM, 'tr', shadow=False)
+        right = 'idle %d  /  redline %d rpm' % (e.idle, e.redline)
+        rwid = ui.font(int(20 * u)).size(right)[0]
+        text(surf, 'ENGINE  -  %s' % e.config, (rx, y), int(24 * u), ACCENT, shadow=False, maxw=rw - rwid - 16 * u)
+        text(surf, right, (rx + rw, y + 3 * u), int(20 * u), DIM, 'tr', shadow=False)
         y += 28 * u
-        gh = 222 * u
+        gh = clamp(H - 156 * u - y, 130 * u, 222 * u)
         g = pygame.Rect(rx, y, rw, gh)
         hover = mouse[0] if g.collidepoint(mouse) else None
         ui.draw_engine_graph(surf, tuple(g), e, u, hover_x=hover)
@@ -527,7 +539,7 @@ def draw_map_preview(surf, rect, bid, u, t=0.0, ground_col=None):
         pts.append((x + w + 4, gy))
         pygame.draw.polygon(surf, rgb(mixc(b['mtn'], b['sky1'], col_f)), pts)
     snowy = bid in (worlds.TAIGA, worlds.WHITEOUT)
-    top = b['snow'] if snowy else (mixc(b['dirt'], (58, 42, 32), 0.7) if bid == worlds.MUDLANDS else b['top'])
+    top = b['snow'] if snowy else (mixc(b['dirt'], (58, 42, 32), 0.7) if bid == worlds.MUDLANDS else (66, 68, 78) if bid == worlds.SUNBELT else b['top'])
     pygame.draw.polygon(surf, rgb(b['dirt'], 0.85), [(x, gy + 5 * u), (x + w, gy + 5 * u), (x + w, y + h), (x, y + h)])
     pygame.draw.polygon(surf, rgb(b['deep']), [(x, gy + h * 0.2), (x + w, gy + h * 0.16), (x + w, y + h), (x, y + h)])
     pygame.draw.polygon(surf, rgb(top), [(x, gy), (x + w, gy), (x + w, gy + 8 * u), (x, gy + 9 * u)])
@@ -637,7 +649,7 @@ class MapScene(Scene):
         m = worlds.MAPS[self.idx]
         d = worlds.DIFF_BY_ID[self.app.settings['last']['difficulty']]
         y2 = y + ch + 18 * u
-        lines = ui.wrap(m.description, int(23 * u), W * 0.5)
+        lines = ui.wrap(m.description, int(23 * u), W - 560 * u - 36 * u - 28 * u)
         for k, ln in enumerate(lines):
             text(surf, ln, (36 * u, y2 + k * 25 * u), int(23 * u), TEXT, shadow=False)
         text(surf, '%s: %s' % (d.name, d.description), (36 * u, y2 + (len(lines) + 0.4) * 25 * u), int(21 * u), ACCENT, shadow=False)

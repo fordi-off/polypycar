@@ -20,7 +20,7 @@ SC = 240          # samples per chunk (24 m)
 ZL = 96.0         # zone length (m)
 CHUNK_W = DX * SC
 
-DIRT, ROCK, WOOD, MUD, GRAVEL, SNOW, ICE, PACKED = range(8)
+DIRT, ROCK, WOOD, MUD, GRAVEL, SNOW, ICE, PACKED, ASPHALT, HARDPACK = range(10)
 # mu: friction, S: nominal soft depth (m), ks: soil stiffness (N/m), pb: bearing pressure (Pa),
 # crr: rolling resistance, drag: viscous drag (N s/m), dig: digging rate when a wheel spins (m/s per m/s slip)
 MATERIALS = [
@@ -32,10 +32,12 @@ MATERIALS = [
     dict(name='snow',   mu=0.36, S=0.60, ks=4.5e5, pb=12e3,  crr=0.035, drag=500,  dig=0.07, loose=1.0),
     dict(name='ice',    mu=0.13, S=0.0,  ks=1e9,   pb=1e9,   crr=0.008, drag=0,    dig=0.0,  loose=0.0),
     dict(name='packed', mu=0.58, S=0.12, ks=9e5,   pb=110e3, crr=0.020, drag=0,    dig=0.02, loose=0.3),
+    dict(name='asphalt', mu=1.12, S=0.0, ks=1e9,   pb=1e9,   crr=0.011, drag=0,    dig=0.0,  loose=0.0),
+    dict(name='hardpack', mu=0.96, S=0.03, ks=6e6, pb=450e3, crr=0.014, drag=0,    dig=0.004, loose=0.15),
 ]
 
 # ------------------------------------------------------------------ biomes
-TAIGA, MUDLANDS, HIGHLAND, WHITEOUT = range(4)
+TAIGA, MUDLANDS, HIGHLAND, WHITEOUT, SUNBELT = range(5)
 COLOR_KEYS = ['top', 'dirt', 'deep', 'rock', 'sky0', 'sky1', 'mtn', 'tree', 'trunk', 'snow', 'sun']
 _BIOME_SRC = [
     dict(name='taiga', decor=['pine', 'pine', 'pine', 'rockdecor'], density=0.30, fog=0.30, snowfall=0.75,
@@ -54,6 +56,10 @@ _BIOME_SRC = [
          top='#e8eef6', dirt='#7d8798', deep='#444e5f', rock='#8a93a2', sky0='#b2c0d0', sky1='#eef2f6',
          mtn='#b6c4d6', tree='#35605e', trunk='#4a4038', snow='#f7faff', sun='#f8fafd',
          surf={SNOW: .72, PACKED: .10, ICE: .10, DIRT: .08}),
+    dict(name='sunbelt', decor=['bush', 'cactus', 'bush', 'dune', 'broadleaf'], density=0.16, fog=0.10, snowfall=0.0,
+         top='#d2b074', dirt='#b0773f', deep='#5c3d26', rock='#9a8a7a', sky0='#3b94e0', sky1='#d4ecff',
+         mtn='#7096c0', tree='#648c3c', trunk='#6a4a32', snow='#f5f8fc', sun='#fff4c8',
+         surf={HARDPACK: .35, GRAVEL: .30, ASPHALT: .35}),
 ]
 BIOMES = []
 for _b in _BIOME_SRC:
@@ -164,8 +170,13 @@ def _f_flat(f, x):
     return 0.0
 
 
+def _f_kicker(f, x):
+    u = (x - f['x0']) / (f['x1'] - f['x0'])
+    return f['h'] * u ** 1.25
+
+
 FEATURE = dict(rock=_f_rock, mound=_f_mound, ripple=_f_ripple, hole=_f_hole, log=_f_log,
-               ledge=_f_ledge, flat=_f_flat)
+               ledge=_f_ledge, flat=_f_flat, kicker=_f_kicker)
 
 THEMES = {
     'cruise': ['mound', 'mound', 'ripple', 'rock', 'ice'],
@@ -174,9 +185,13 @@ THEMES = {
     'mire': ['rut', 'rut', 'mudstretch', 'log', 'drift', 'rut'],
     'drifts': ['drift', 'drift', 'drift', 'mound', 'ice', 'rock'],
     'steep': ['climb', 'climb', 'mound', 'ledge', 'rock', 'drift'],
+    'rally_flow': ['crest', 'whoops', 'mound', 'wash', 'whoops'],
+    'rally_jumps': ['kicker', 'crest', 'kicker', 'mound', 'wash'],
+    'rally_rough': ['wash', 'whoops', 'rocksm', 'wash', 'mound'],
+    'rally_clear': ['mound', 'wash', 'mound'],
     'mixed': ['rock', 'log', 'rut', 'ledge', 'climb', 'drift', 'mudstretch', 'rockfield', 'ice', 'logs'],
 }
-THEME_NAMES = list(THEMES)
+THEME_NAMES = ['cruise', 'rocky', 'timber', 'mire', 'drifts', 'steep', 'mixed']      # themes the default maps pick from
 
 
 class Terrain:
@@ -211,7 +226,10 @@ class Terrain:
         d = self.difficulty(xc)
         near = abs(xc) < 100
         theme = 'cruise'
-        if not near:
+        mt = self.world.map
+        if not near and mt.themes:
+            theme = mt.themes[int(H(26) * len(mt.themes)) % len(mt.themes)]
+        elif not near:
             w = [3 * (1 - d) + 0.4, 1, 1, 1 + d, 1, 1 + 0.5 * d, 1 + d]
             pick = H(26) * sum(w)
             for i, v in enumerate(w):
@@ -230,7 +248,7 @@ class Terrain:
                 surface = m
                 break
         if near:
-            surface = DIRT if abs(xc) < 60 else PACKED
+            surface = mt.start_surface if mt.start_surface is not None else (DIRT if abs(xc) < 60 else PACKED)
         soft = 1.0
         wm = self.world.map.soft * self.world.diff.soft
         if surface == SNOW:
@@ -274,7 +292,7 @@ class Terrain:
             guard += 1
             typ = pool[int(r() * len(pool))]
             end = self._add_feature(lst, typ, cursor, r, sc, d, x_end, snowy, zp)
-            gap_scale = (1.8 if zp['theme'] == 'cruise' else 1.0) * self.world.diff.gaps
+            gap_scale = (1.8 if zp['theme'] == 'cruise' else 1.0) * self.world.diff.gaps * self.world.map.gaps
             cursor = end + lerp(16, 5.5, d) * (0.6 + 0.8 * r()) * gap_scale
         return lst
 
@@ -331,6 +349,27 @@ class Terrain:
         if typ == 'ice':
             L = 7 + r() * 8
             return push(dict(t='flat', x0=x0, x1=x0 + L, mat=ICE, whole=True))
+        if typ == 'kicker':                   # dirt jump: ramp up, then nothing
+            L = 8 + r() * 5
+            return push(dict(t='kicker', x0=x0, x1=x0 + L, h=(0.6 + 1.3 * r()) * (0.55 + 0.6 * sc)))
+        if typ == 'crest':                    # big rounded crest you can take at speed
+            w = 14 + r() * 12
+            return push(dict(t='mound', x0=x0, x1=x0 + w, h=(1.2 + 2.2 * r()) * (0.6 + 0.6 * sc)))
+        if typ == 'whoops':                   # long rhythm section
+            wl = 6 + r() * 4
+            n = 3 + int(r() * 4)
+            return push(dict(t='ripple', x0=x0, x1=x0 + wl * n, h=(0.25 + 0.35 * r()) * (0.5 + 0.7 * sc), n=n))
+        if typ == 'wash':                     # washboard
+            ln = 12 + r() * 16
+            return push(dict(t='ripple', x0=x0, x1=x0 + ln, h=(0.04 + 0.06 * r()) * (0.6 + sc), n=round(ln / (0.9 + r() * 0.5))))
+        if typ == 'rocksm':                   # a few small rocks to dodge or bump over
+            n = 1 + int(r() * 3)
+            x = x0
+            for _ in range(n):
+                w = 0.5 + 0.8 * r()
+                H = (0.07 + 0.11 * r()) * (0.6 + sc)
+                x = push(dict(t='rock', x0=x, x1=x + w, pts=_rock_profile(r, H), mat=ROCK)) + 2 + r() * 4
+            return x
         return x0 + 1
 
     # ---- continuous height (used to fill chunks)

@@ -86,8 +86,8 @@ def test_every_vehicle_settles_level_and_drives():
 
 def test_vehicle_stats_are_ordered():
     s = {v.id: V.stats(v) for v in V.VEHICLES}
-    assert s['pickup4x4']['mass'] < s['logger6x6']['mass'] < s['hauler8x8']['mass']
-    assert s['pickup4x4']['top_kmh'] > s['hauler8x8']['top_kmh']
+    assert s['rally4x4']['mass'] < s['pickup4x4']['mass'] < s['logger6x6']['mass'] < s['hauler8x8']['mass']
+    assert s['rally4x4']['top_kmh'] > s['pickup4x4']['top_kmh'] > s['hauler8x8']['top_kmh']
     assert s['hauler8x8']['hp'] > s['logger6x6']['hp'] > s['pickup4x4']['hp']
 
 
@@ -133,6 +133,84 @@ def test_start_biome():
     assert T.BIOMES[T.biome_id_at(0)]['name'] == 'highland'
     t = T.Terrain(9, worlds.make('mudbog'))
     assert T.BIOMES[T.biome_id_at(0)]['name'] == 'mudlands'
+
+
+# ------------------------------------------------------------------ rally stage + rally car
+def test_rally_map_is_all_firm_ground():
+    for d in worlds.DIFFICULTIES:
+        t = T.Terrain(4, worlds.make('rally', d.id))
+        for z in range(0, 60):
+            assert t.zone_param(z)['surface'] in (T.HARDPACK, T.GRAVEL, T.ASPHALT)
+        assert max(t.h_at(i) - t.floor_at(i) for i in range(0, 20000, 7)) < 0.1      # no deep soil anywhere
+        assert all(T.biome_id_at(x) == T.SUNBELT for x in range(-400, 6000, 200))
+
+
+def test_rally_car_is_fast_on_firm_ground_and_useless_in_snow():
+    car = Car(Flat(T.ASPHALT), V.RALLY)
+    car.reset(-100)
+    for _ in range(120):
+        car.control(1 / 60, 0, 0, 0, 0)
+        car.step(1 / 60)
+    peak = 0.0
+    for _ in range(60 * 30):
+        car.control(1 / 60, 1.0, 0, 0, 0)
+        car.step(1 / 60)
+        peak = max(peak, car.vx * 3.6)
+    assert peak > 190
+    snow = Car(Flat(T.SNOW), V.RALLY)
+    snow.reset(-100)
+    snow.pressure = 0.5
+    for _ in range(120):
+        snow.control(1 / 60, 0, 0, 0, 0)
+        snow.step(1 / 60)
+    for _ in range(60 * 20):
+        snow.control(1 / 60, 0.5, 0, 0, 0)
+        snow.step(1 / 60)
+    assert snow.x + 100 < 40
+
+
+def test_single_range_vehicle_ignores_low_range():
+    car = Car(Flat(T.ASPHALT), V.RALLY)
+    assert not car.drive.has_range
+    r = car.ratio
+    car.low = True
+    assert not car.low and car.ratio == r
+
+
+def test_rally_map_suits_the_rally_car_not_the_hauler():
+    def run(spec):
+        t = T.Terrain(7, worlds.make('rally', 'normal'))
+        c = Car(t, spec)
+        c.reset(0)
+        for _ in range(60 * 25):
+            c.control(1 / 60, 1.0, 0, 0, 0)
+            c.step(1 / 60)
+        return c.x
+    assert run(V.RALLY) > run(V.HAULER) * 1.4
+
+
+# ------------------------------------------------------------------ display
+def test_borderless_uses_the_desktop_resolution_and_keeps_the_windowed_size():
+    from polypycar.app import App
+    s = Settings(os.path.join(tempfile.mkdtemp(), 's.json'))
+    s['resolution'] = [1280, 720]
+    app = App(s)
+    app.desktop = (1920, 1080)
+    App._desktop = staticmethod(lambda: (1920, 1080))
+    s['display_mode'] = 'borderless'
+    app.apply_display()
+    assert app.desktop == (1920, 1080)
+    assert s['resolution'] == [1280, 720]                 # windowed choice untouched
+    from polypycar.scenes import SettingsScene
+    page = SettingsScene(app)._build('Video')
+    res = [w for w in page.widgets if getattr(w, 'label', '') == 'Resolution'][0]
+    assert res.locked() and res.opts == [((1920, 1080), '1920 x 1080  (desktop)')]
+    before = list(s['resolution'])
+    res.step(1)
+    res.click((0, 0), (0, 0, 800, 50), 1.0)
+    assert s['resolution'] == before                      # cannot be changed while borderless
+    s['display_mode'] = 'windowed'
+    assert not res.locked() and len(res.opts) > 1
 
 
 # ------------------------------------------------------------------ settings & keys

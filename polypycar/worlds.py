@@ -2,7 +2,8 @@
 beyond the seed: which biomes appear, how hilly it is, how deep the soft stuff is, how hard it ramps."""
 from dataclasses import dataclass, field
 
-TAIGA, MUDLANDS, HIGHLAND, WHITEOUT = range(4)
+TAIGA, MUDLANDS, HIGHLAND, WHITEOUT, SUNBELT = range(5)
+HARDPACK = 9      # material id (see terrain.MATERIALS)
 
 
 @dataclass
@@ -18,6 +19,10 @@ class MapType:
     surf: dict = None             # optional {biome: {material: weight}} override
     sequence: tuple = ()          # forced biome order for the first segments (index 0 = start)
     preview: int = 0              # biome whose look is used on the card
+    themes: tuple = None          # restrict zone themes (terrain.THEMES keys); None = the default mix
+    start_surface: int = None     # material of the opening zones
+    gaps: float = 1.0             # obstacle spacing multiplier
+    fast: bool = False            # tuned for high speed (hint only)
 
 
 @dataclass
@@ -61,6 +66,11 @@ MAPS = [
     MapType('whiteout', 'Whiteout', 'Deep snow and nothing else',
             'A blizzard-wrapped plateau with the deepest snow in the game. Every metre is a negotiation.',
             (WHITEOUT,), sequence=(WHITEOUT,), soft=1.25, preview=WHITEOUT),
+    MapType('rally', 'Rally Stage', 'Full gas on gravel and tarmac',
+            'No mud, no snow: hard-packed road, loose gravel and asphalt under a clear sky. Long crests, '
+            'rhythm sections and jumps - flat out is the point. A rally car belongs here.',
+            (SUNBELT,), sequence=(SUNBELT,), relief=0.8, soft=0.5, preview=SUNBELT, fast=True,
+            themes=('rally_flow', 'rally_jumps', 'rally_rough', 'rally_clear'), start_surface=HARDPACK, gaps=1.1),
 ]
 DIFFICULTIES = [
     Difficulty('easy', 'Easy', 'Shallower soil, fewer obstacles, slow ramp-up', 0.0, 6000.0, 0.8, 1.35),

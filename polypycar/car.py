@@ -73,7 +73,7 @@ class Car:
 
     @low.setter
     def low(self, v):
-        self.drive.low = bool(v)
+        self.drive.low = bool(v) and self.drive.has_range
         self._update_ratio()
 
     @property

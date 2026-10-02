@@ -60,7 +60,7 @@ class TransmissionApp:
         dr = car.drive
         panel(surf, (x0, y0, w, h), u, None)
         text(surf, 'TRANSMISSION', (x0 + 16 * u, y0 + 10 * u), int(26 * u), ACCENT)
-        text(surf, '%s  -  %s%s' % (dr.drive_name(), 'LOW range' if dr.low else 'HIGH range', '  -  all diffs locked' if dr.all_locked else ''),
+        text(surf, '%s  -  %s%s' % (dr.drive_name(), ('LOW range' if dr.low else 'HIGH range') if dr.has_range else 'single range', '  -  all diffs locked' if dr.all_locked else ''),
              (x0 + 190 * u, y0 + 14 * u), int(22 * u), DIM, shadow=False)
         self._hit((x0 + w - 36 * u, y0 + 8 * u, 28 * u, 28 * u), lambda: setattr(self, 'closed', True), 'Close')
         text(surf, 'x', (x0 + w - 22 * u, y0 + 22 * u), int(28 * u), DIM, 'c')
@@ -119,14 +119,17 @@ class TransmissionApp:
         self._arrow(surf, (tx, ty + 42 * u), (t_rect[0], ty + 42 * u), u, 1.0, car)
         facet_box(surf, t_rect, (58, 66, 88), cut=8 * u, edge=EDGE)
         text(surf, 'TRANSFER CASE', (t_rect[0] + 10 * u, t_rect[1] + 12 * u), int(19 * u), DIM, 'ml', shadow=False)
-        hw = (t_rect[2] - 24 * u) / 2
-        for i, (lab, low) in enumerate((('HIGH', False), ('LOW', True))):
-            r_ = (t_rect[0] + 8 * u + i * (hw + 8 * u), t_rect[1] + 26 * u, hw, 34 * u)
-            button(surf, r_, lab, u, pygame.Rect(r_).collidepoint(mp), False, active=(dr.low == low), size=22)
-            self._hit(r_, (lambda lo=low: setattr(car, 'low', lo)),
-                      'LOW range multiplies gearing by x%.1f - crawl speed, huge torque. HIGH is normal driving.' if low else 'HIGH range: normal gearing.')
-            if low:
-                self.hits[-1] = (self.hits[-1][0], self.hits[-1][1], self.hits[-1][2] % dr.low_mult)
+        if dr.has_range:
+            hw = (t_rect[2] - 24 * u) / 2
+            for i, (lab, low) in enumerate((('HIGH', False), ('LOW', True))):
+                r_ = (t_rect[0] + 8 * u + i * (hw + 8 * u), t_rect[1] + 26 * u, hw, 34 * u)
+                button(surf, r_, lab, u, pygame.Rect(r_).collidepoint(mp), False, active=(dr.low == low), size=22)
+                tip = ('LOW range multiplies gearing by x%.1f - crawl speed, huge torque. HIGH is normal driving.' % dr.low_mult) if low else 'HIGH range: normal gearing.'
+                self._hit(r_, (lambda lo=low: setattr(car, 'low', lo)), tip)
+        else:
+            r_ = (t_rect[0] + 8 * u, t_rect[1] + 26 * u, t_rect[2] - 16 * u, 34 * u)
+            button(surf, r_, 'SINGLE RANGE', u, False, False, disabled=True, size=21)
+            self._hit(r_, None, 'This vehicle has a single-speed transfer case - no low range.')
         text(surf, 'ratio %.1f : 1' % abs(car.ratio), (t_rect[0] + t_rect[2] / 2, t_rect[1] + 72 * u), int(20 * u), ACCENT, 'c', shadow=False)
 
         # ---- driveline tree

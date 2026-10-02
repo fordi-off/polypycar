@@ -113,7 +113,8 @@ class Session:
                 target.fill(deep, (dx, under, surf.get_width(), H - under))
         d = 1 if self.car.vx >= 0 else -1
         edge = c1 if d > 0 else c0
-        self.chunks.prefetch([edge + d, edge + 2 * d, edge - d * (c1 - c0 + 1)], budget=0.005)
+        far = 3 if abs(self.car.vx) > 28 else 2
+        self.chunks.prefetch([edge + k * d for k in range(1, far + 1)] + [edge - d * (c1 - c0 + 1)], budget=0.006)
         self.chunks.prune((c0 + c1) // 2, keep=4)
         self.chunks.draw_soil(target, v, q['soil_step'])
         self.parts.draw(target, v)

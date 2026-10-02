@@ -16,13 +16,16 @@ python -m polypycar            # --windowed to force a window, --reset-settings 
   real torque and horsepower curves - the very data the physics runs on (hover the graph to read it).
   | vehicle | | engine |
   |---|---|---|
+  | Zephyr GT Rally | sleek AWD rally coupe, built for the Rally Stage | 2.0 L turbo petrol, 350 hp, 248 km/h |
   | Ridgeback 4x4 | quick, light pickup | 3.0 L twin-turbo diesel, 239 hp |
   | Timberjack 6x6 | log truck, the all-rounder | 12.0 L diesel, 409 hp, 1615 Nm |
   | Behemoth 8x8 | 12-tonne container hauler | 13.0 L twin-turbo diesel, 600 hp, 2385 Nm |
-* **Maps**: Endless Trail, Snowfield, Mud Bog, Highland Pass, Whiteout - each with Easy / Normal / Hard / Brutal
-  and an optional seed. Biomes: taiga, mudlands, highland, whiteout.
+* **Maps**: Endless Trail, Snowfield, Mud Bog, Highland Pass, Whiteout and **Rally Stage** (a flat-out speed map: hard-packed road,
+  gravel and asphalt, crests, rhythm sections and jumps - no mud or snow) - each with Easy / Normal / Hard / Brutal
+  and an optional seed. Biomes: taiga, mudlands, highland, whiteout, sunbelt.
 * **Settings** (saved automatically to `~/.polypycar/settings.json`, or `$POLYPYCAR_HOME`):
-  display mode (windowed / borderless fullscreen / exclusive fullscreen), resolution, render scale, FPS limit
+  display mode (windowed / borderless fullscreen / exclusive fullscreen; borderless always uses your true desktop
+  resolution, so the resolution row is locked there), resolution, render scale, FPS limit
   (30 - 240 or unlimited), FPS counter, quality preset, snowfall and particle amount, fog, vehicle AA, master /
   engine / wind volume, units (km/h or mph), throttle build-up speed, camera zoom and look-ahead, default tyre
   pressure and gearbox, HUD and menu scale, and **full key rebinding** (two slots per action, conflicts are swapped).

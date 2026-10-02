@@ -73,7 +73,10 @@ class Particles:
             slip = abs(w.slip)
             spd = abs(w.vt)
             m = w.mat
-            if m in (T.ROCK, T.WOOD, T.ICE):
+            if m == T.ASPHALT:                       # tyre smoke when it really slides
+                inten = max(0.0, slip - 2.2) * 0.22
+                col = (214, 216, 222)
+            elif m in (T.ROCK, T.WOOD, T.ICE):
                 inten = max(0.0, slip - 1.5) * 0.1
                 col = (190, 196, 206) if m == T.ICE else (150, 150, 158)
             else:

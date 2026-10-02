@@ -163,7 +163,8 @@ class Note(Widget):
         self.s = s
 
     def draw(self, surf, rect, u, focused, mouse):
-        text(surf, self.s, (rect[0] + 4 * u, rect[1] + 6 * u), int(21 * u), DIM, shadow=False)
+        s = self.s() if callable(self.s) else self.s
+        text(surf, s, (rect[0] + 4 * u, rect[1] + 6 * u), int(21 * u), DIM, shadow=False)
 
 
 class Row(Widget):
@@ -228,8 +229,12 @@ class Toggle(Row):
 class Choice(Row):
     """Cycle through options with arrows. options: list of (value, label) or callable returning one."""
 
-    def __init__(self, label, options, get, set_):
+    def __init__(self, label, options, get, set_, disabled=None):
         self.label, self._opts, self.get, self.set = label, options, get, set_
+        self.disabled = disabled              # callable -> True while the choice is locked
+
+    def locked(self):
+        return bool(self.disabled and self.disabled())
 
     @property
     def opts(self):
@@ -243,6 +248,8 @@ class Choice(Row):
         return 0
 
     def step(self, d):
+        if self.locked():
+            return
         o = self.opts
         self.set(o[(self._idx() + d) % len(o)][0])
 
@@ -250,13 +257,16 @@ class Choice(Row):
         ctl = self.frame(surf, rect, u, focused, pygame.Rect(rect).collidepoint(mouse))
         x, y, w, h = ctl
         aw = h
+        lock = self.locked()
         for sgn, bx in ((-1, x), (1, x + w - aw)):
             r = (bx, y, aw, h)
-            button(surf, r, '<' if sgn < 0 else '>', u, pygame.Rect(r).collidepoint(mouse), False, size=26)
+            button(surf, r, '<' if sgn < 0 else '>', u, pygame.Rect(r).collidepoint(mouse) and not lock, False, size=26, disabled=lock)
         o = self.opts
-        text(surf, o[self._idx()][1], (x + w / 2, y + h / 2), int(25 * u), ACCENT, 'c', maxw=w - 2 * aw - 8 * u)
+        text(surf, o[self._idx()][1], (x + w / 2, y + h / 2), int(25 * u), DIM if lock else ACCENT, 'c', maxw=w - 2 * aw - 8 * u)
 
     def click(self, pos, rect, u):
+        if self.locked():
+            return True
         _, ctl = self.split(rect, u)
         self.step(-1 if pos[0] < ctl[0] + ctl[2] / 2 else 1)
         return True

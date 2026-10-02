@@ -1,5 +1,6 @@
 """Application shell: window / display modes, FPS limiter, scene stack, screenshots, toasts."""
 import os
+import sys
 import time
 import pygame
 
@@ -7,8 +8,24 @@ from .settings import Settings, config_dir
 from . import ui
 
 
+def _make_dpi_aware():
+    """On Windows, an app that isn't DPI-aware is told a *scaled* desktop size (e.g. 1536x864 on a 1080p
+    screen at 125%) and gets bitmap-stretched. Opt in so desktop / borderless sizes are the real pixels."""
+    if sys.platform != 'win32':
+        return
+    try:
+        import ctypes
+        try:
+            ctypes.windll.shcore.SetProcessDpiAwareness(2)      # per-monitor
+        except (AttributeError, OSError):
+            ctypes.windll.user32.SetProcessDPIAware()
+    except Exception:
+        pass
+
+
 class App:
     def __init__(self, settings=None):
+        _make_dpi_aware()
         pygame.init()
         pygame.font.init()
         self.settings = settings or Settings()
@@ -38,20 +55,18 @@ class App:
     def apply_display(self):
         st = self.settings
         mode = st['display_mode']
+        self.desktop = self._desktop()
         w, h = st['resolution']
         dw, dh = self.desktop
-        flags = 0
         if mode == 'borderless':
-            size = (dw, dh)
-            flags = pygame.NOFRAME
+            # always the true desktop resolution; the saved windowed size is left alone
+            size, flags = (dw, dh), pygame.NOFRAME
             os.environ['SDL_VIDEO_WINDOW_POS'] = '0,0'
             os.environ.pop('SDL_VIDEO_CENTERED', None)
         elif mode == 'fullscreen':
-            size = (min(w, dw), min(h, dh))
-            flags = pygame.FULLSCREEN
+            size, flags = (min(w, dw), min(h, dh)), pygame.FULLSCREEN
         else:
-            size = (w, h)
-            flags = pygame.RESIZABLE
+            size, flags = (min(w, dw), min(h, dh)), pygame.RESIZABLE
             os.environ.pop('SDL_VIDEO_WINDOW_POS', None)
             os.environ['SDL_VIDEO_CENTERED'] = '1'
         try:
@@ -59,6 +74,12 @@ class App:
         except pygame.error:
             st['display_mode'] = 'windowed'
             self.screen = pygame.display.set_mode((1280, 720), pygame.RESIZABLE)
+            return
+        if mode == 'borderless':
+            try:                                   # an existing window keeps its old position otherwise
+                pygame.display.set_window_position((0, 0))
+            except (pygame.error, AttributeError):
+                pass
 
     def toggle_fullscreen(self):
         st = self.settings

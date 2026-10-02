@@ -49,6 +49,7 @@ class Drivetrain:
         self.tree = spec['tree']
         self.scale = scale
         self.low_mult = spec.get('low_mult', 2.3)
+        self.has_range = spec.get('has_range', True)      # False: single-speed transfer (road/rally cars)
         self.disconnectable = set(spec.get('disconnectable', ()))
         self.default_modes = dict(spec.get('default', {}))
         self.low = False
