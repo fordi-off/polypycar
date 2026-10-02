@@ -19,7 +19,7 @@ def arch(cx, w, h, bottom):
 def _flares(c, mounts, w, h, bottom, width=0.09):
     for cx in mounts:
         pts = c.L([(x, y + 0.03) for x, y in arch(cx, w, h, bottom)[1:-1]])
-        pygame.draw.lines(c.surf, rgb(DARK), False, pts, max(2, int(c.view.s * width)))
+        c.paint.lines(rgb(DARK), pts, max(2, int(c.view.s * width)))
 
 
 def _driver(c, hx, hy, scale, cap=(210, 60, 52), shirt=(58, 68, 94)):
@@ -269,7 +269,7 @@ def rally_post(c):
     top = [(x, y) for x, y in _TOP if -1.9 <= x <= 1.9]                                          # soft shoulder highlight
     poly(base, [(x, y - 0.03) for x, y in top] + [(x, y - 0.11) for x, y in reversed(top)], 1.13)
     for cx in (-1.25, 1.25):                                                                    # arch outlines
-        pygame.draw.lines(c.surf, rgb((22, 24, 30)), False, c.L(_round_arch(cx)[1:-1]), max(2, int(c.view.s * 0.045)))
+        c.paint.lines(rgb((22, 24, 30)), c.L(_round_arch(cx)[1:-1]), max(2, int(c.view.s * 0.045)))
     g = [(x, y - 0.04) for x, y in _TOP if -1.15 <= x <= 0.72 and y - 0.04 > _BELT + 0.04]
     poly((62, 88, 112), [(0.8, _BELT)] + g + [(-1.18, _BELT)])
     poly((150, 190, 214), [(0.8, _BELT)] + g[:len(g) // 2 + 1] + [(0.05, _BELT)], 0.95)

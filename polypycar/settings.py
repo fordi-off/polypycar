@@ -38,7 +38,10 @@ DEFAULTS = {
     # video
     'display_mode': 'windowed',          # windowed | borderless | fullscreen
     'resolution': [1280, 720],
-    'render_scale': 1.0,
+    'render_scale': 1.0,                 # software renderer only
+    'renderer': 'auto',                  # auto | gpu | software
+    'msaa': 4,                           # GPU renderer anti-aliasing samples (0 = off)
+    'vsync': False,
     'fps_target': 60,                    # 0 = unlimited
     'show_fps': False,
     'quality': 'high',                   # low | medium | high

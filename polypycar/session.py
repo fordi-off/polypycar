@@ -10,6 +10,8 @@ from .terrain_render import ChunkRenderer
 from .scenery import Scenery
 from .car_render import CarRenderer
 from .particles import Particles
+from . import gfx, gl_world
+from .gfx import SurfacePainter
 
 ANCHOR = 0.58           # the camera point sits this far down the screen
 assert ANCHOR == 0.58   # terrain_render.ANCHOR_Y must match
@@ -55,6 +57,7 @@ class Session:
             self.car.control(1 / 60, 0, 0, 0, 0)
             self.car.step(1 / 60)
         self.view.cx, self.view.cy = self.car.x, self.car.y + 1.4
+        self._glc = None
 
     def apply_settings(self):
         st = self.settings
@@ -88,6 +91,8 @@ class Session:
     def draw(self, target):
         st = self.settings
         W, H = target.get_size()
+        if gfx.ACTIVE is not None:
+            return self.draw_gpu(gfx.ACTIVE, W, H)
         v = self.view
         v.W, v.H = W, H
         v.s = H / st['camera_zoom']
@@ -96,8 +101,9 @@ class Session:
         sc = self.scenery
         q = st.q
         sc.draw_sky(target, pal)
-        sc.draw_clouds(target, v.cx, v.cy, v.s)
-        sc.draw_mountains(target, v.cx, v.cy, v.s, pal, q['mountains'])
+        sp = SurfacePainter(target)
+        sc.draw_clouds(sp, W, H, v.cx, v.cy, v.s)
+        sc.draw_mountains(sp, W, H, v.cx, v.cy, v.s, pal, q['mountains'])
         if st['fog'] and q['fog']:
             sc.draw_fog(target, pal)
         c0 = math.floor((v.cx - W / 2 / v.s) / T.CHUNK_W)
@@ -121,3 +127,33 @@ class Session:
         self.carr.draw(target, v, self.car, self.terrain)
         if self.world_cfg.snowfall:
             sc.draw_snow(target, pal, v.cx, v.cy, v.s, st['snow_density'] * q['snow'])
+
+    def draw_gpu(self, gl, W, H):
+        st, q, pal, sc, v = self.settings, self.settings.q, self.pal, self.scenery, self.view
+        v.W, v.H = W, H
+        v.s = H / st['camera_zoom']
+        if self._glc is None or self._glc.gl is not gl:        # (re)created with the GL context
+            self._glc = gl_world.GLChunks(gl, self.chunks)
+        rec = gl.rec
+        gl_world.sky(rec, W, H, pal)
+        sc.draw_sun(rec, W, H, pal)
+        sc.draw_clouds(rec, W, H, v.cx, v.cy, v.s)
+        sc.draw_mountains(rec, W, H, v.cx, v.cy, v.s, pal, q['mountains'])
+        if st['fog'] and q['fog']:
+            gl_world.fog(rec, W, H, pal)
+        gl.flush()
+        c0 = math.floor((v.cx - W / 2 / v.s) / T.CHUNK_W)
+        c1 = math.floor((v.cx + W / 2 / v.s) / T.CHUNK_W)
+        self._glc.draw(v, c0, c1)
+        d = 1 if self.car.vx >= 0 else -1
+        edge = c1 if d > 0 else c0
+        far = 3 if abs(self.car.vx) > 28 else 2
+        self._glc.prefetch([edge + k * d for k in range(1, far + 1)] + [edge - d * (c1 - c0 + 1)], budget=0.006)
+        self._glc.prune((c0 + c1) // 2, keep=4)
+        self.chunks.prune_soil((c0 + c1) // 2, keep=4)
+        rec.add_array(self.chunks.soil_vertices(v, q['soil_step']))
+        self.parts.draw_gpu(rec, v)
+        self.carr.draw_gpu(rec, v, self.car, self.terrain)
+        if self.world_cfg.snowfall:
+            rec.add_array(gl_world.snow_array(sc, W, H, v.cx, v.cy, v.s, pal, st['snow_density'] * q['snow']))
+        gl.flush()

@@ -256,6 +256,46 @@ def test_default_binds_have_no_conflicts():
             seen[k] = a
 
 
+# ------------------------------------------------------------------ GPU renderer (skipped without moderngl / EGL)
+def test_triangulate_concave_polygon_area():
+    from polypycar.gfx import triangulate
+    pts = [(0, 0), (4, 0), (4, 4), (2, 1), (0, 4)]                   # concave 'M' shape
+    idx = triangulate(pts)
+    area = sum(abs((pts[idx[k + 1]][0] - pts[idx[k]][0]) * (pts[idx[k + 2]][1] - pts[idx[k]][1]) -
+                   (pts[idx[k + 2]][0] - pts[idx[k]][0]) * (pts[idx[k + 1]][1] - pts[idx[k]][1])) / 2 for k in range(0, len(idx), 3))
+    assert abs(area - 10.0) < 1e-9, area
+
+
+def test_gpu_renderer_draws_the_world_offscreen():
+    try:
+        import moderngl
+        ctx = moderngl.create_standalone_context(backend='egl')
+    except Exception:
+        print('   (no offscreen OpenGL here - skipped)')
+        return
+    from polypycar import gfx
+    from polypycar.session import Session
+    from polypycar.settings import Settings
+    st = Settings(os.path.join(tempfile.mkdtemp(), 's.json'))
+    gl = gfx.GLRenderer(ctx, target=ctx.simple_framebuffer((640, 360)))
+    old = gfx.ACTIVE
+    gfx.ACTIVE = gl
+    try:
+        sess = Session(st, 'logger6x6', 0, worlds.make('snowfield', 'normal', True), 3)
+        for _ in range(30):
+            sess.update(1 / 60, __import__('polypycar.session', fromlist=['Controls']).Controls())
+        gl.begin(640, 360)
+        sess.draw(pygame.Surface((640, 360)))
+        raw = gl.target.read(components=3)
+        img = pygame.image.frombuffer(raw, (640, 360), 'RGB')
+        sky, ground = img.get_at((20, 360 - 8)), img.get_at((320, 360 - 40))
+        assert tuple(sky) != tuple(ground)
+        assert sum(ground[:3]) > 30                                    # terrain mesh was drawn, not left at the clear colour
+        assert sess.chunks.soil_vertices(sess.view, 2) is None or sess.chunks.soil_vertices(sess.view, 2).shape[1] == 6
+    finally:
+        gfx.ACTIVE = old
+
+
 if __name__ == '__main__':
     for name, fn in list(globals().items()):
         if name.startswith('test_'):

@@ -10,6 +10,8 @@ from .util import clamp, mixc, shade, rgb, noise1, hash_i
 from .session import Session, Controls, View
 from .settings import ACTIONS, RESOLUTIONS, FPS_OPTIONS
 from .terrain_render import draw_decor
+from . import gfx
+from .gfx import SurfacePainter
 from .hud_apps import Hud
 from .audio import Audio
 from .car import Car
@@ -185,7 +187,12 @@ class SettingsScene(Scene):
                        disabled=lambda: st['display_mode'] == 'borderless'),
                 Note(lambda: 'Borderless fullscreen always uses your desktop resolution (%d x %d) - lower the render scale to go lighter.' % desk()
                      if st['display_mode'] == 'borderless' else 'Windowed and exclusive fullscreen use this resolution.'),
-                Choice('Render scale', [(s_, '%d%%' % round(s_ * 100)) for s_ in (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)],
+                Choice('Renderer', [('auto', 'Auto (GPU if available)'), ('gpu', 'GPU (OpenGL)'), ('software', 'Software (CPU)')],
+                       getter('renderer'), setter('renderer', app.rebuild_display)),
+                Note(lambda: 'Active: %s%s' % (app.renderer_name, ('  -  GPU unavailable: ' + getattr(app, 'gl_error', '')[:60]) if not app.gl and st['renderer'] != 'software' and getattr(app, 'gl_error', '') else '')),
+                Choice('Anti-aliasing (GPU)', [(0, 'Off'), (2, 'MSAA 2x'), (4, 'MSAA 4x'), (8, 'MSAA 8x')], getter('msaa'), setter('msaa', app.rebuild_display)),
+                Toggle('VSync (GPU)', getter('vsync'), setter('vsync', app.rebuild_display)),
+                Choice('Render scale (software)', [(s_, '%d%%' % round(s_ * 100)) for s_ in (0.5, 0.6, 0.7, 0.8, 0.9, 1.0)],
                        getter('render_scale'), setter('render_scale')),
                 Choice('FPS limit', [(f, 'Unlimited' if f == 0 else '%d fps' % f) for f in FPS_OPTIONS], getter('fps_target'), setter('fps_target')),
                 Toggle('Show FPS counter', getter('show_fps'), setter('show_fps')),
@@ -549,8 +556,9 @@ def draw_map_preview(surf, rect, bid, u, t=0.0, ground_col=None):
         return (x + w * 0.5 + wx * pm, gy + 4 * u - wy * pm)
 
     kinds = b['decor']
+    paint = SurfacePainter(surf)
     for k, wx in enumerate((-2.2, -0.9, 1.4, 2.3)):
-        draw_decor(surf, P, kinds[k % len(kinds)], wx, 0.0, 0.8 + 0.25 * (k % 2), b, k + 50 + bid)
+        draw_decor(paint, P, kinds[k % len(kinds)], wx, 0.0, 0.8 + 0.25 * (k % 2), b, k + 50 + bid)
     if bid in (worlds.TAIGA, worlds.WHITEOUT):
         for i in range(34):
             fx = (hash_i(i, 5) * w + t * 20 * (0.5 + hash_i(i, 6))) % w
@@ -754,7 +762,7 @@ class DriveScene(Scene):
         st = self.app.settings
         W, H = surf.get_size()
         rs = st['render_scale']
-        if rs < 0.99:
+        if rs < 0.99 and gfx.ACTIVE is None:
             sz = (max(320, int(W * rs)), max(180, int(H * rs)))
             if self.world_surf is None or self.world_surf.get_size() != sz:
                 self.world_surf = pygame.Surface(sz)

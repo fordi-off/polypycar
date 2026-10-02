@@ -11,6 +11,7 @@ class Particles:
     def __init__(self):
         self.p = []   # [x, y, vx, vy, life, max, size, (r,g,b), kind]  kind 0 dust, 1 mud, 2 spark
         self.overlay = None
+        self.dirty = None
         self.rnd = random.Random(7)
         self.mult = 1.0
 
@@ -43,24 +44,68 @@ class Particles:
             return
         if self.overlay is None or self.overlay.get_size() != surf.get_size():
             self.overlay = pygame.Surface(surf.get_size(), pygame.SRCALPHA)
+            self.dirty = None
         ov = self.overlay
-        ov.fill((0, 0, 0, 0))
+        if self.dirty is not None:                    # clear only what we drew last frame
+            ov.fill((0, 0, 0, 0), self.dirty)
         s = view.s
+        W, H = surf.get_size()
+        x0 = y0 = 10 ** 9
+        x1 = y1 = -10 ** 9
+        draw_poly, draw_line = pygame.draw.polygon, pygame.draw.line
+        cos, sin = math.cos, math.sin
         for q in self.p:
             x, y = view.tf(q[0], q[1])
             f = q[4] / q[5]
             kind = q[8]
             if kind == 2:
-                pygame.draw.line(ov, (255, 220, 120, 255), (x, y), (x - q[2] * 0.03 * s, y + q[3] * 0.03 * s), 2)
+                ex, ey = x - q[2] * 0.03 * s, y + q[3] * 0.03 * s
+                draw_line(ov, (255, 220, 120, 255), (x, y), (ex, ey), 2)
+                lo_x, hi_x, lo_y, hi_y = min(x, ex) - 2, max(x, ex) + 2, min(y, ey) - 2, max(y, ey) + 2
+            else:
+                r = q[6] * s * ((1.4 - 0.4 * f) if kind == 0 else (2.4 - 1.4 * f) if kind == 3 else 1.0)
+                if x < -r or y < -r or x > W + r or y > H + r:
+                    continue
+                a = int(200 * f * (0.7 if kind == 0 else 0.55 if kind == 3 else 1.0))
+                col = (int(q[7][0]), int(q[7][1]), int(q[7][2]), a)
+                ang = q[0] * 3.0
+                ca_, sa_ = cos(ang) * r, sin(ang) * r
+                draw_poly(ov, col, ((x + ca_, y + sa_), (x - sa_, y + ca_), (x - ca_, y - sa_), (x + sa_, y - ca_)))
+                lo_x, hi_x, lo_y, hi_y = x - r * 1.5, x + r * 1.5, y - r * 1.5, y + r * 1.5
+            if lo_x < x0: x0 = lo_x
+            if hi_x > x1: x1 = hi_x
+            if lo_y < y0: y0 = lo_y
+            if hi_y > y1: y1 = hi_y
+        if x1 < x0:
+            self.dirty = None
+            return
+        rect = pygame.Rect(int(x0), int(y0), int(x1 - x0) + 2, int(y1 - y0) + 2).clip(pygame.Rect(0, 0, W, H))
+        surf.blit(ov, rect.topleft, rect)
+        self.dirty = rect
+
+    def draw_gpu(self, rec, view):
+        """Same particles as draw(), submitted as triangles to a Recorder."""
+        s = view.s
+        W, H = view.W, view.H
+        cos, sin = math.cos, math.sin
+        tf = view.tf
+        for q in self.p:
+            x, y = tf(q[0], q[1])
+            f = q[4] / q[5]
+            kind = q[8]
+            if kind == 2:
+                rec.line((255, 220, 120), (x, y), (x - q[2] * 0.03 * s, y + q[3] * 0.03 * s), 2)
                 continue
             r = q[6] * s * ((1.4 - 0.4 * f) if kind == 0 else (2.4 - 1.4 * f) if kind == 3 else 1.0)
+            if x < -r or y < -r or x > W + r or y > H + r:
+                continue
             a = int(200 * f * (0.7 if kind == 0 else 0.55 if kind == 3 else 1.0))
-            col = (int(q[7][0]), int(q[7][1]), int(q[7][2]), a)
+            col = (q[7][0], q[7][1], q[7][2], a)
             ang = q[0] * 3.0
-            ca_, sa_ = math.cos(ang) * r, math.sin(ang) * r
-            pts = ((x + ca_, y + sa_), (x - sa_, y + ca_), (x - ca_, y - sa_), (x + sa_, y - ca_))
-            pygame.draw.polygon(ov, col, pts)
-        surf.blit(ov, (0, 0))
+            ca_, sa_ = cos(ang) * r, sin(ang) * r
+            p0, p1, p2, p3 = (x + ca_, y + sa_), (x - sa_, y + ca_), (x - ca_, y - sa_), (x + sa_, y - ca_)
+            rec.tri(col, p0, p1, p2)
+            rec.tri(col, p0, p2, p3)
 
     # --- spawning helpers driven by the truck state
     def wheel_fx(self, car, dt, pal, exhaust):

@@ -5,6 +5,7 @@ import math
 import pygame
 from .util import clamp, rgb
 from .vehicle_art import ART
+from .gfx import SurfacePainter, Recorder, triangulate
 
 
 class SubView:
@@ -19,10 +20,10 @@ class SubView:
 
 
 class Ctx:
-    """What a body-art routine draws with."""
+    """What a body-art routine draws with: a painter plus chassis-local -> view coordinate mapping."""
 
-    def __init__(self, surf, view, car, base, head, ca, sa):
-        self.surf, self.view, self.car, self.base, self.head = surf, view, car, base, head
+    def __init__(self, paint, view, car, base, head, ca, sa):
+        self.paint, self.view, self.car, self.base, self.head = paint, view, car, base, head
         self.ca, self.sa = ca, sa
         self.paint_color = None
 
@@ -31,7 +32,11 @@ class Ctx:
         return [tf(car.x + x * ca - y * sa, car.y + x * sa + y * ca) for x, y in pts]
 
     def poly(self, col, pts, k=1.0):
-        pygame.draw.polygon(self.surf, rgb(col, k), self.L(pts))
+        verts = self.L(pts)
+        if self.paint.needs_tris:
+            self.paint.tris(rgb(col, k), verts, triangulate([tuple(p) for p in pts]))
+        else:
+            self.paint.poly(rgb(col, k), verts)
 
 
 class CarRenderer:
@@ -89,26 +94,30 @@ class CarRenderer:
             self.buf = pygame.Surface((w * ss, h * ss), pygame.SRCALPHA)
         self.buf.fill((0, 0, 0, 0))
         sv = SubView(s * ss, fx * ss, fy * ss, cxw - BW / 2, cyw + BH / 2)
-        self._draw(self.buf, sv, car, terrain)
+        self._draw(SurfacePainter(self.buf), sv, car, terrain)
         if ss == 1:
             surf.blit(self.buf, (ix, iy))
         else:
             surf.blit(pygame.transform.smoothscale(self.buf, (w, h)), (ix, iy))
 
-    def _draw(self, surf, view, car, terrain):
+    def draw_gpu(self, paint, view, car, terrain):
+        """GPU path: no supersample buffer - the GPU's MSAA and float coordinates give the smoothness."""
+        self._draw(paint, view, car, terrain)
+
+    def _draw(self, paint, view, car, terrain):
         cfg = car.cfg
         ca, sa = math.cos(car.a), math.sin(car.a)
         pre, post = ART[self.spec.art]
-        ctx = Ctx(surf, view, car, self.paint_color, self.head, ca, sa)
+        ctx = Ctx(paint, view, car, self.paint_color, self.head, ca, sa)
         pre(ctx)
         for w in car.wheels:
-            self._suspension(surf, view, car, w, ca, sa)
+            self._suspension(paint, view, car, w, ca, sa)
         for w in car.wheels:
-            self._wheel(surf, view, w, cfg['wheel_r'], terrain)
+            self._wheel(paint, view, w, cfg['wheel_r'], terrain)
         post(ctx)
 
     # ------------------------------------------------------------------
-    def _suspension(self, surf, view, car, w, ca, sa):
+    def _suspension(self, paint, view, car, w, ca, sa):
         cfg = car.cfg
         k0 = cfg['wheel_r'] / 0.62
         tf = view.tf
@@ -121,13 +130,13 @@ class CarRenderer:
         # lower arm: chassis pivot -> hub
         pvx = car.x + (w.mx - sgn * 0.9 * k0) * ca + 0.3 * k0 * sa
         pvy = car.y + (w.mx - sgn * 0.9 * k0) * sa - 0.3 * k0 * ca
-        pygame.draw.line(surf, (44, 46, 54), tf(pvx, pvy), tf(w.hx, w.hy), max(3, int(view.s * 0.16 * k0)))
+        paint.line((44, 46, 54), tf(pvx, pvy), tf(w.hx, w.hy), max(3, int(view.s * 0.16 * k0)))
         # shock (dark body + bright piston)
         ax, ay = mx_w + fx * 0.2 * k0, my_w + fy * 0.2 * k0
         bx, by = w.hx + fx * 0.1 * k0, w.hy + fy * 0.1 * k0
-        pygame.draw.line(surf, (30, 30, 36), tf(ax, ay), tf(bx, by), max(4, int(view.s * 0.15 * k0)))
+        paint.line((30, 30, 36), tf(ax, ay), tf(bx, by), max(4, int(view.s * 0.15 * k0)))
         mxp, myp = (ax + bx) / 2, (ay + by) / 2
-        pygame.draw.line(surf, (210, 214, 224), tf(mxp, myp), tf(bx, by), max(2, int(view.s * 0.07 * k0)))
+        paint.line((210, 214, 224), tf(mxp, myp), tf(bx, by), max(2, int(view.s * 0.07 * k0)))
         # coil spring (zig-zag)
         n = 9
         pts = []
@@ -137,9 +146,9 @@ class CarRenderer:
             t = i / n
             off = 0.0 if i in (0, n) else (0.14 if i % 2 else -0.14) * k0
             pts.append(tf(lx0 + (lx1 - lx0) * t + fx * off, ly0 + (ly1 - ly0) * t + fy * off))
-        pygame.draw.lines(surf, (255, 176, 40), False, pts, max(2, int(view.s * 0.08 * k0)))
+        paint.lines((255, 176, 40), pts, max(2, int(view.s * 0.08 * k0)))
 
-    def _wheel(self, surf, view, w, R, terrain):
+    def _wheel(self, paint, view, w, R, terrain):
         tf = view.tf
         cx, cy = w.hx, w.hy
         k0 = R / 0.62
@@ -158,20 +167,20 @@ class CarRenderer:
             outer.append(((cx + (px - cx) * stretch), py))
         S = [tf(*p) for p in outer]
         C = tf(cx, cy)
-        pygame.draw.polygon(surf, (22, 22, 26), S)
+        paint.fan((22, 22, 26), C, S)
         for k in range(N):
             tone = 42 if (k // 2) % 2 == 0 else 30
-            pygame.draw.polygon(surf, (tone, tone, tone + 4), (C, S[k], S[(k + 1) % N]))
+            paint.tri((tone, tone, tone + 4), C, S[k], S[(k + 1) % N])
         side = [tf(cx + math.cos(ang + k * math.tau / 20) * 0.46 * k0, cy + math.sin(ang + k * math.tau / 20) * 0.46 * k0) for k in range(20)]
-        pygame.draw.polygon(surf, (56, 56, 64), side)
+        paint.fan((56, 56, 64), C, side)
         for k in range(10):
             a0, a1 = ang + k * math.tau / 10, ang + (k + 1) * math.tau / 10
             rim = ((cx, cy), (cx + math.cos(a0) * 0.33 * k0, cy + math.sin(a0) * 0.33 * k0), (cx + math.cos(a1) * 0.33 * k0, cy + math.sin(a1) * 0.33 * k0))
             tone = 190 if k % 2 else 146
-            pygame.draw.polygon(surf, (tone, tone + 4, tone + 14), [tf(*p) for p in rim])
+            paint.tri((tone, tone + 4, tone + 14), *[tf(*p) for p in rim])
         for k in range(6):
             a = ang + k * math.tau / 6
             sp = [(cx + math.cos(a - 0.14) * 0.07 * k0, cy + math.sin(a - 0.14) * 0.07 * k0), (cx + math.cos(a - 0.09) * 0.3 * k0, cy + math.sin(a - 0.09) * 0.3 * k0),
                   (cx + math.cos(a + 0.09) * 0.3 * k0, cy + math.sin(a + 0.09) * 0.3 * k0), (cx + math.cos(a + 0.14) * 0.07 * k0, cy + math.sin(a + 0.14) * 0.07 * k0)]
-            pygame.draw.polygon(surf, (70, 72, 82), [tf(*p) for p in sp])
-        pygame.draw.polygon(surf, (226, 228, 236), [tf(cx + math.cos(ang + k * math.tau / 6) * 0.1 * k0, cy + math.sin(ang + k * math.tau / 6) * 0.1 * k0) for k in range(6)])
+            paint.poly((70, 72, 82), [tf(*p) for p in sp])
+        paint.fan((226, 228, 236), C, [tf(cx + math.cos(ang + k * math.tau / 6) * 0.1 * k0, cy + math.sin(ang + k * math.tau / 6) * 0.1 * k0) for k in range(6)])

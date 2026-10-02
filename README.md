@@ -8,7 +8,14 @@ throttle, and the right setup (tyre pressure, low range, diff locks) is what get
 ```
 pip install -r requirements.txt
 python -m polypycar            # --windowed to force a window, --reset-settings to start fresh
+python -m polypycar --bench    # frame-time breakdown (physics / drawing / GPU / present) for your machine
 ```
+
+**GPU rendering**: with `moderngl` installed (it is in requirements.txt) the game draws the world with OpenGL 3.3 -
+terrain is baked into GPU meshes once, everything else is batched triangles, and MSAA gives smooth edges. The
+menus and HUD are still drawn by pygame and composited on top. Settings -> Video -> *Renderer* picks
+Auto / GPU / Software; Auto falls back to the software renderer if OpenGL 3.3 isn't available (or is itself
+software-emulated). Also there: MSAA samples and VSync. Render scale and vehicle AA only apply to the software renderer.
 
 ## The game
 * **Main menu** with a live demo drive behind it. **Drive** -> **Garage** -> **Map** -> go. *Quick start* repeats your last setup.
@@ -65,7 +72,7 @@ logs and ice are hard.
 clutch so huge ratios stay stable) · `drivetrain.py` differential tree · `vehicles.py` vehicle specs, engines and
 derived stats - **add a vehicle by adding a spec + art routine** · `vehicle_art.py` body art · `terrain.py` /
 `worlds.py` world generation, soil, biomes, map types · `terrain_render.py`, `scenery.py`, `car_render.py`,
-`particles.py` rendering · `session.py` a running world · `hud_apps.py` HUD and apps · `ui.py` widgets and the engine
+`particles.py` rendering · `gfx.py` painters (software / triangle recorder) + the OpenGL renderer · `gl_world.py` GPU terrain meshes · `bench.py` · `session.py` a running world · `hud_apps.py` HUD and apps · `ui.py` widgets and the engine
 graph · `scenes.py` menus, garage, map select, drive, pause · `settings.py` · `app.py` window, display modes, FPS ·
 `audio.py` synthesised sound.
 

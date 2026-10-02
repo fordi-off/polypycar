@@ -6,8 +6,10 @@ Dynamic part: the soft soil layer (snow / mud / dirt between the hard pan and th
 is drawn every frame so ruts, packed tracks, thrown soil and exposed ground are always current."""
 import math
 import time
+import numpy as np
 import pygame
 from .util import clamp, hash_i, hash2, mixc, shade, rgb
+from .gfx import SurfacePainter, Recorder
 from . import terrain as T
 
 LIGHT = (0.45, 0.89)
@@ -56,6 +58,7 @@ class ChunkRenderer:
         self.cache = {}
         self.pending = {}
         self.soil = {}
+        self._soil_arr = {}
 
     def set_scale(self, ppm):
         if abs(ppm - self.ppm) > 1e-6:
@@ -69,6 +72,13 @@ class ChunkRenderer:
             del self.cache[k]
         for k in [k for k in self.soil if abs(k - ci_center) > keep]:
             del self.soil[k]
+        for k in [k for k in self._soil_arr if abs(k - ci_center) > keep]:
+            del self._soil_arr[k]
+
+    def prune_soil(self, ci_center, keep=3):
+        for d in (self.soil, self._soil_arr):
+            for k in [k for k in d if abs(k - ci_center) > keep]:
+                del d[k]
 
     def get(self, ci):
         """Chunk surface, built synchronously if it isn't ready."""
@@ -99,17 +109,19 @@ class ChunkRenderer:
                 return
 
     # ------------------------------------------------------------------ build
-    def _build(self, ci):
-        t, ppm = self.t, self.ppm
+    def _extent(self, ci):
+        t = self.t
         x0 = ci * T.CHUNK_W
-        x1 = x0 + T.CHUNK_W
-        pad = 0.8
-        X0, X1 = x0 - pad, x1 + pad
+        X0, X1 = x0 - 0.8, x0 + T.CHUNK_W + 0.8
         i0, i1 = math.floor(X0 / T.DX), math.ceil(X1 / T.DX)
-        h0s = [t.h0_at(i) for i in range(i0, i1 + 1)]
-        fls = [t.floor_at(i) for i in range(i0, i1 + 1)]
-        top = max(h0s) + DECOR_TOP
-        bottom = min(fls) - DEEP_BELOW
+        top = max(t.h0_at(i) for i in range(i0, i1 + 1)) + DECOR_TOP
+        bottom = min(t.floor_at(i) for i in range(i0, i1 + 1)) - DEEP_BELOW
+        return X0, X1, top, bottom
+
+    def _build(self, ci):
+        """Software path: rasterise the chunk into a pygame Surface at the current screen scale."""
+        ppm = self.ppm
+        X0, X1, top, bottom = self._extent(ci)
         W = int((X1 - X0) * ppm) + 2
         H = int((top - bottom) * ppm) + 2
         surf = pygame.Surface((W, H), pygame.SRCALPHA)
@@ -117,17 +129,27 @@ class ChunkRenderer:
         def P(x, y):
             return ((x - X0) * ppm, (top - y) * ppm)
 
+        yield from self._emit(ci, SurfacePainter(surf), P, X0, X1, bottom)
+        self.cache[ci] = (surf.convert_alpha(), X0, top, bottom)
+
+    def _emit(self, ci, paint, P, X0, X1, bottom, underfill=False):
+        """Generator: paints chunk `ci` through `paint` (any painter), mapping world coords with P."""
+        t = self.t
+        x0 = ci * T.CHUNK_W
+        x1 = x0 + T.CHUNK_W
+        i0, i1 = math.floor(X0 / T.DX), math.ceil(X1 / T.DX)
         pal_c = T.palette_at((x0 + x1) / 2)
-        poly = pygame.draw.polygon
+        deep = rgb(pal_c['deep'])
 
         # decor (behind the ground)
-        self._decor(surf, P, ppm, ci, x0, x1)
+        self._decor(paint, P, ci, x0, x1)
         yield
 
-        # deep base
-        pts = [P(T.DX * i, t.floor_at(i)) for i in range(i0, i1 + 1, 2)]
-        pts += [P(X1, bottom), P(X0, bottom)]
-        poly(surf, rgb(pal_c['deep']), pts)
+        # deep base (below the hard pan); the GPU mesh also carries a big under-fill so nothing shows below it
+        top_pts = [P(T.DX * i, t.floor_at(i)) for i in range(i0, i1 + 1, 2)]
+        paint.poly_mono(deep, top_pts, P(X0, bottom), P(X1, bottom))
+        if underfill:
+            paint.poly(deep, [P(X0, bottom), P(X1, bottom), P(X1, bottom - 120), P(X0, bottom - 120)])
 
         yield
         # faceted dirt layers
@@ -161,7 +183,7 @@ class ChunkRenderer:
                     tris = ((a, b, d_), (b, c_, d_))
                 for idx, tri in enumerate(tris):
                     br = 0.86 + 0.26 * hash2(gi * 2 + idx, k, 2)
-                    poly(surf, rgb(base, br), tri)
+                    paint.poly(rgb(base, br), tri)
 
         yield
         # surface band, 0.2 m columns: hard surfaces (rock / logs / ice) are baked from their top;
@@ -196,11 +218,10 @@ class ChunkRenderer:
             br = lit * jit
             if m in (T.ROCK, T.WOOD):
                 br *= 0.92 + 0.16 * hash_i(i, 5)
-            poly(surf, rgb(col, br), (A, B, Cc))
-            poly(surf, rgb(col, br * (0.93 if hash_i(i, 6) > 0.5 else 1.06)), (A, Cc, D))
+            paint.poly(rgb(col, br), (A, B, Cc))
+            paint.poly(rgb(col, br * (0.93 if hash_i(i, 6) > 0.5 else 1.06)), (A, Cc, D))
             if m == T.ASPHALT and not soft and (i // 24) % 2 == 0:          # painted edge line, dashed
-                poly(surf, (222, 224, 230), (A, B, P(xb, yb - 0.07), P(xa, ya - 0.07)))
-        self.cache[ci] = (surf.convert_alpha(), X0, top, bottom)
+                paint.poly((222, 224, 230), (A, B, P(xb, yb - 0.07), P(xa, ya - 0.07)))
 
     # ------------------------------------------------------------ live soil layer
     def soil_cols(self, ci):
@@ -224,9 +245,7 @@ class ChunkRenderer:
         ib = math.ceil((view.cx + W / 2 / s) / T.DX) + 4
         n = ib - ia + 5
         hp, fp, dp = t.h_at, t.floor_at, t.dens_at
-        hs = [hp(i) for i in range(ia, ia + n)]
-        fs = [fp(i) for i in range(ia, ia + n)]
-        ds = [dp(i) for i in range(ia, ia + n)]
+        hs, fs, ds = t.span(ia, n, 0), t.span(ia, n, 2), t.span(ia, n, 3)
         poly = pygame.draw.polygon
         cx, cy = view.cx, view.cy
         ox, oy = W * 0.5, view.H * ANCHOR_Y
@@ -269,8 +288,65 @@ class ChunkRenderer:
             poly(scr, c1, ((xa, sya), (xb, syb), (xb, sfb)))
             poly(scr, c2, ((xa, sya), (xb, sfb), (xa, sfa)))
 
+    def _soil_np(self, ci):
+        c = self._soil_arr.get(ci)
+        if c is None:
+            cols = self.soil_cols(ci)
+            c = self._soil_arr[ci] = tuple(np.array([e[j] for e in cols], dtype=np.float64) for j in range(3))
+        return c
+
+    def soil_vertices(self, view, step=2):
+        """GPU path: the live soil layer as a float32 (N*6, 6) vertex array (screen px, rgba 0-1)."""
+        t = self.t
+        W, H, s = view.W, view.H, view.s
+        ia = (math.floor((view.cx - W / 2 / s) / T.DX) - 4) & ~3
+        ib = math.ceil((view.cx + W / 2 / s) / T.DX) + 4
+        n = ib - ia + 5
+        hs = np.array(t.span(ia, n, 0))
+        fs = np.array(t.span(ia, n, 2))
+        ds = np.array(t.span(ia, n, 3))
+        k = np.arange(0, n - step, step)
+        ya, yb, fa, fb = hs[k], hs[k + step], fs[k], fs[k + step]
+        th = ya - fa
+        keep = (th >= 0.004) | (yb - fb >= 0.004)
+        if not keep.any():
+            return None
+        k, ya, yb, fa, fb, th = k[keep], ya[keep], yb[keep], fa[keep], fb[keep], th[keep]
+        dk = ds[k]
+        idx = ia + k
+        ci = idx // T.SC
+        loc = (idx - ci * T.SC) >> 1
+        m = len(k)
+        fresh, packed, bare = np.empty((m, 3)), np.empty((m, 3)), np.empty((m, 3))
+        for c in np.unique(ci):
+            sel = ci == c
+            f_, p_, b_ = self._soil_np(int(c))
+            fresh[sel], packed[sel], bare[sel] = f_[loc[sel]], p_[loc[sel]], b_[loc[sel]]
+        d = np.minimum(dk * 0.9, 1.0)[:, None]
+        col = fresh + (packed - fresh) * d
+        f = np.clip(th / 0.14, 0.0, 1.0)[:, None]
+        col = np.where((th < 0.14)[:, None], bare + (col - bare) * f, col)
+        sl = (yb - ya) / (T.DX * step)
+        il = 1.0 / np.sqrt(1.0 + sl * sl)
+        lit = 0.8 + 0.34 * (-sl * il * LIGHT[0] + il * LIGHT[1])
+        c1 = np.minimum(col * lit[:, None], 255.0) / 255.0
+        c2 = np.minimum(col * (lit * 0.93)[:, None], 255.0) / 255.0
+        ox, oy = W * 0.5, H * ANCHOR_Y
+        xa = (idx * T.DX - view.cx) * s + ox
+        xb = xa + T.DX * step * s
+        sya, syb = oy - (ya - view.cy) * s, oy - (yb - view.cy) * s
+        sfa, sfb = oy - (fa - view.cy) * s + 1, oy - (fb - view.cy) * s + 1
+        out = np.ones((m, 6, 6), dtype=np.float32)
+        px = (xa, xb, xb, xa, xb, xa)
+        py = (sya, syb, sfb, sya, sfb, sfa)
+        for v in range(6):
+            out[:, v, 0] = px[v]
+            out[:, v, 1] = py[v]
+            out[:, v, 2:5] = c1 if v < 3 else c2
+        return out.reshape(-1, 6)
+
     # ------------------------------------------------------------------ decor
-    def _decor(self, surf, P, ppm, ci, x0, x1):
+    def _decor(self, paint, P, ci, x0, x1):
         t = self.t
         slot = 1.5
         for n in range(math.floor((x0 + 1.8) / slot), math.floor((x1 - 1.8) / slot) + 1):
@@ -289,11 +365,11 @@ class ChunkRenderer:
             kind = kinds[int(hash_i(n, 32) * len(kinds))]
             s = 0.75 + 0.9 * hash_i(n, 33)
             y = t.h0_at(i) - 0.2
-            draw_decor(surf, P, kind, x, y, s, pal, n)
+            draw_decor(paint, P, kind, x, y, s, pal, n)
 
 
-def _pl(surf, P, col, pts):
-    pygame.draw.polygon(surf, rgb(col), [P(*p) for p in pts])
+def _pl(paint, P, col, pts):
+    paint.poly(rgb(col), [P(*p) for p in pts])
 
 
 def draw_decor(surf, P, kind, x, y, s, pal, n):

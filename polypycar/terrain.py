@@ -442,6 +442,18 @@ class Terrain:
             del self.chunks[k]
         self._ci = None
 
+    def span(self, i0, n, k):
+        """Samples i0 .. i0+n-1 of chunk field k (0 h, 2 floor, 3 density) as one list."""
+        out = []
+        i, end = i0, i0 + n
+        while i < end:
+            ci = i // SC
+            lo = i - ci * SC
+            take = min(SC - lo, end - i)
+            out += self.chunk(ci)[k][lo:lo + take]
+            i += take
+        return out
+
     def h_at(self, i):
         ci = i // SC
         if ci != self._ci:
