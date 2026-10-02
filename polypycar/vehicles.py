@@ -90,6 +90,7 @@ BASE = dict(
     clutch_cap=2600.0, brake_t=16000.0,
     drag=3.8, air_torque=30000.0, ground_torque=6000.0, ang_damp=2500.0,
     body_k=500000.0, body_c=25000.0, body_mu=0.6,
+    air_level=0.0,
 )
 
 LOGGER = VehicleSpec(
@@ -208,12 +209,12 @@ TROPHY = VehicleSpec(
               (-2.6, 0.55), (-2.75, 0.2), (-2.7, -0.3), (-1.0, -0.46), (0.0, -0.48), (1.0, -0.46)],
     art='trophy', art_box=(7.6, 3.7, -0.15), exhaust=(-2.7, 0.15),
     physics=dict(
-        mass=3000.0, inertia=5600.0, wheel_mass=55.0, wheel_r=0.52, wheel_i=4.6,
+        mass=3000.0, inertia=8000.0, wheel_mass=55.0, wheel_r=0.52, wheel_i=4.6,
         mount_x=(1.7, -1.75), mount_y=0.1, l0=0.92, lmin=0.18, lmax=0.92,
-        k=(60000.0, 64000.0), k_prog=(170000.0, 180000.0), c_bump=5400.0, c_reb=8800.0, v_blow=1.3, blow=0.35,
+        k=(60000.0, 64000.0), k_prog=(260000.0, 280000.0), c_bump=9000.0, c_reb=16000.0, v_blow=1.3, blow=0.35,
         k_stop=6.0e5, c_stop=15000.0, k_lat=6.0e6, c_lat=30000.0,
         tire_k=340000.0, tire_c=2000.0, soil_c=8500.0, pen_max=0.22, k_rim=3.5e6, tire_w=1.0,
-        clutch_cap=1900.0, brake_t=9000.0, drag=1.5, air_torque=14000.0, ground_torque=4500.0, ang_damp=650.0,
+        clutch_cap=1900.0, brake_t=9000.0, drag=1.5, air_torque=18000.0, ground_torque=4500.0, ang_damp=2000.0, air_level=16000.0,
         body_k=300000.0, body_c=13000.0, v_min=0.4),
     tires='1.04 m long-travel desert tyres', diff_scale=0.5,
     paints=[(250, 120, 20), (222, 40, 44), (40, 120, 230), (240, 214, 40), (236, 238, 244), (40, 190, 120), (30, 34, 44)],

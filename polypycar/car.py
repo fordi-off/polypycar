@@ -476,6 +476,9 @@ class Car:
         grounded = any(w.touching for w in W)
         Tq += self.lean * (c['ground_torque'] if grounded else c['air_torque'])
         Tq -= c['ang_damp'] * om_ * (1.0 if grounded else 1.5)
+        if not grounded and c['air_level'] > 0.0:      # vehicles with a stabilised airframe pitch toward the landing slope
+            e = math.atan(tr.slope(px_ + vx_ * 0.4)) - self.a
+            Tq += c['air_level'] * (e if -1.2 < e < 1.2 else (1.2 if e > 0 else -1.2))
         self.airborne = not grounded and hit_f <= 0
 
         # ---- integrate (semi-implicit Euler)
