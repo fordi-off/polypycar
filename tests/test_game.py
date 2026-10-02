@@ -256,6 +256,16 @@ def test_default_binds_have_no_conflicts():
             seen[k] = a
 
 
+def test_trophy_truck_is_rear_drive_by_default_and_very_powerful():
+    spec = V.get('trophy4x4')
+    car = Car(T.Terrain(1, worlds.make('rally', 'normal')), spec)
+    assert car.drive.axle_on == [False, True] and car.drive.drive_name() == '4x2'
+    car.drive.toggle_axle(0)
+    assert car.drive.drive_name() == '4x4'
+    st = V.stats(spec)
+    assert st['hp'] > 900 and st['hp'] > 2 * V.stats(V.get('pickup4x4'))['hp'] and st['travel'] > 0.7
+
+
 # ------------------------------------------------------------------ GPU renderer (skipped without moderngl / EGL)
 def test_triangulate_concave_polygon_area():
     from polypycar.gfx import triangulate

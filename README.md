@@ -19,11 +19,12 @@ software-emulated). Also there: MSAA samples and VSync. Render scale and vehicle
 
 ## The game
 * **Main menu** with a live demo drive behind it. **Drive** -> **Garage** -> **Map** -> go. *Quick start* repeats your last setup.
-* **Garage**: three vehicles with their own engine, gearbox, driveline and body. The engine panel plots the
+* **Garage**: five vehicles with their own engine, gearbox, driveline and body. The engine panel plots the
   real torque and horsepower curves - the very data the physics runs on (hover the graph to read it).
   | vehicle | | engine |
   |---|---|---|
   | Zephyr GT Rally | sleek AWD rally coupe, built for the Rally Stage | 2.0 L turbo petrol, 350 hp, 248 km/h |
+  | Mojave Trophy Truck | ~1000 hp rear-drive desert racer, 75 cm of travel (front axle can be connected) | 6.2 L supercharged V8, 984 hp, 1260 Nm |
   | Ridgeback 4x4 | quick, light pickup | 3.0 L twin-turbo diesel, 239 hp |
   | Timberjack 6x6 | log truck, the all-rounder | 12.0 L diesel, 409 hp, 1615 Nm |
   | Behemoth 8x8 | 12-tonne container hauler | 13.0 L twin-turbo diesel, 600 hp, 2385 Nm |

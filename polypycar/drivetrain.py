@@ -53,7 +53,7 @@ class Drivetrain:
         self.disconnectable = set(spec.get('disconnectable', ()))
         self.default_modes = dict(spec.get('default', {}))
         self.low = False
-        self.axle_on = [True] * n_axles
+        self.axle_on = [i not in spec.get('axles_off', ()) for i in range(n_axles)]
         self.diffs = []
         self._collect(self.tree, spec.get('modes', (OPEN, LSD, LOCK)))
         self.reset_modes()

@@ -190,7 +190,36 @@ RALLY = VehicleSpec(
     paints=[(36, 92, 206), (214, 52, 48), (244, 200, 40), (60, 160, 96), (236, 238, 244), (40, 44, 54), (232, 120, 36)],
 )
 
-VEHICLES = [RALLY, PICKUP, LOGGER, HAULER]
+TROPHY = VehicleSpec(
+    id='trophy4x4', name='Mojave Trophy Truck', tagline='Nearly 1000 hp, 75 cm of travel, zero self-control',
+    description='A desert-racing trophy truck: a tube-frame monster with a supercharged V8 making close to a thousand horsepower, '
+                'enormous long-travel suspension that swallows whoops and jumps, and rear-wheel drive by default. '
+                'It will light up its tyres in any gear - feather the gas, or lock in the front axle from the transmission app for traction. '
+                'Brilliant on the Rally Stage and dry dirt; in snow and mud all that power just digs a hole.',
+    kind='4x2 / 4x4 trophy truck',
+    engine=Engine('LS-SC 6.2', '6.2 L supercharged V8',
+                  [(0, 350), (1000, 560), (2000, 820), (3000, 1060), (4000, 1210), (5000, 1260), (5800, 1210),
+                   (6500, 1010), (7000, 720), (7500, 0)],
+                  idle=1100, redline=6800, inertia=0.3, torque_scale=1.0, brake0=75, brake1=0.03, cylinders=8),
+    gears=(3.6, 2.4, 1.75, 1.35, 1.08, 0.88), reverse=3.4, final=6.0,
+    drivetrain=dict(tree=('center', 0, 1), has_range=False, low_mult=1.0, disconnectable=[0], axles_off=[0],
+                    default={'center': 1}),
+    body_pts=[(2.8, -0.3), (2.82, 0.08), (2.4, 0.38), (1.0, 0.56), (0.5, 1.06), (-0.6, 1.08), (-1.0, 0.62),
+              (-2.6, 0.55), (-2.75, 0.2), (-2.7, -0.3), (-1.0, -0.46), (0.0, -0.48), (1.0, -0.46)],
+    art='trophy', art_box=(7.6, 3.7, -0.15), exhaust=(-2.7, 0.15),
+    physics=dict(
+        mass=3000.0, inertia=5600.0, wheel_mass=55.0, wheel_r=0.52, wheel_i=4.6,
+        mount_x=(1.7, -1.75), mount_y=0.1, l0=0.92, lmin=0.18, lmax=0.92,
+        k=(60000.0, 64000.0), k_prog=(170000.0, 180000.0), c_bump=5400.0, c_reb=8800.0, v_blow=1.3, blow=0.35,
+        k_stop=6.0e5, c_stop=15000.0, k_lat=6.0e6, c_lat=30000.0,
+        tire_k=340000.0, tire_c=2000.0, soil_c=8500.0, pen_max=0.22, k_rim=3.5e6, tire_w=1.0,
+        clutch_cap=1900.0, brake_t=9000.0, drag=1.5, air_torque=14000.0, ground_torque=4500.0, ang_damp=650.0,
+        body_k=300000.0, body_c=13000.0, v_min=0.4),
+    tires='1.04 m long-travel desert tyres', diff_scale=0.5,
+    paints=[(250, 120, 20), (222, 40, 44), (40, 120, 230), (240, 214, 40), (236, 238, 244), (40, 190, 120), (30, 34, 44)],
+)
+
+VEHICLES = [RALLY, TROPHY, PICKUP, LOGGER, HAULER]
 BY_ID = {v.id: v for v in VEHICLES}
 
 
